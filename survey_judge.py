@@ -148,9 +148,9 @@ def judge_sample(sample_dir, verbose=False):
     return result
 
 
-def run_all(max_samples=None, verbose=False):
+def run_all(max_samples=None, verbose=False, output_path=None):
     """
-    批量处理Excel中所有样本，结果追加写回原Excel的处理后信息sheet
+    批量处理Excel中所有样本，结果写入新的Excel文件
     """
     from openpyxl import load_workbook
 
@@ -192,7 +192,11 @@ def run_all(max_samples=None, verbose=False):
         print(f'  物种: {res.get("target_species","?")}')
         print(f'  kmer={kmer_str} | NT: {nt_str} | 综合: {df.at[i, "综合判定"]}')
 
-    # 写回Excel
+    # 写入新Excel文件
+    if output_path is None:
+        base, ext = os.path.splitext(EXCEL_PATH)
+        output_path = base + '_结果' + ext
+
     wb = load_workbook(EXCEL_PATH)
     ws = wb[SHEET_NAME]
 
@@ -209,12 +213,12 @@ def run_all(max_samples=None, verbose=False):
             col_idx = header.index(col) + 1
             ws.cell(row=i + 2, column=col_idx, value=df.at[i, col])
 
-    wb.save(EXCEL_PATH)
+    wb.save(output_path)
 
     normal_count = sum(1 for i in range(total) if df.at[i, '综合判定'] == '正常')
     print('\n' + '=' * 60)
     print(f'处理完成: {total} 个样本，正常 {normal_count} 个，异常 {total - normal_count} 个')
-    print(f'结果已写回: {EXCEL_PATH}')
+    print(f'结果已写入: {output_path}')
 
     return df
 

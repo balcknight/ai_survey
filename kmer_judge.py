@@ -55,7 +55,7 @@ def detect_peaks(df, smooth_window=11, smooth_poly=3,
         # 左侧鞍部占峰高度比例过高则标记为异常
         if peak_freq > 0:
             left_ratio = left_min / peak_freq
-            abnormal_flags.append(left_ratio > 0.8)  # 左侧鞍部超过峰高80%视为异常
+            abnormal_flags.append(left_ratio > 0.9)  # 左侧鞍部超过峰高90%视为异常
         else:
             abnormal_flags.append(False)
 
@@ -158,7 +158,7 @@ def classify_peaks(peak_depths, tolerance=0.10):
 
 
 
-def merge_peaks(peaks1, peaks2, tolerance=0.15):
+def merge_peaks(peaks1, peaks2, tolerance=0.15, low_depth_abs=8, low_depth_threshold=50):
     depths1, freqs1 = peaks1
     depths2, freqs2 = peaks2
 
@@ -176,7 +176,11 @@ def merge_peaks(peaks1, peaks2, tolerance=0.15):
         current = all_peaks[i].copy()
         j = i + 1
         while j < len(all_peaks):
-            max_delta = np.ceil(tolerance * current['depth'])
+            # 低深度区用绝对值差，高深度区用比例容差
+            if current['depth'] < low_depth_threshold:
+                max_delta = low_depth_abs
+            else:
+                max_delta = np.ceil(tolerance * current['depth'])
             if abs(all_peaks[j]['depth'] - current['depth']) <= max_delta:
                 if all_peaks[j]['freq'] > current['freq']:
                     current['freq'] = all_peaks[j]['freq']
@@ -191,50 +195,6 @@ def merge_peaks(peaks1, peaks2, tolerance=0.15):
     return merged
 
 
-def main(
-    filepath,
-    depth_min=3,
-    depth_max=300,
-    smooth_window=11,
-    smooth_poly=3,
-    prominence_ratio=0.01,
-    min_distance=10,
-    tolerance=0.2,
-    low_depth_threshold=10,
-    low_peak_freq_ratio=0.6,
-    verbose=True,
-):
-    df = load_data(filepath, depth_min, depth_max)
-    peak_depths, peak_freqs, abnormal_flags = detect_peaks(
-        df, smooth_window, smooth_poly, prominence_ratio, min_distance
-    )
-
-    if verbose:
-        print(f"检测到 {len(peak_depths)} 个峰:")
-        for d, f, ab in zip(peak_depths, peak_freqs, abnormal_flags):
-            flag = " [异常峰型]" if ab else ""
-            print(f"  depth={d:.0f}, frequency={f:.0f}{flag}")
-
-    # 过滤深度<阈值且不成比例的低矮峰
-    filtered_depths, filtered_freqs = filter_low_depth_peak(
-        peak_depths, peak_freqs, tolerance, low_depth_threshold, low_peak_freq_ratio)
-    if len(filtered_depths) < len(peak_depths) and verbose:
-        print(f"已忽略深度<{low_depth_threshold}的第一个峰（高度不及最高峰{low_peak_freq_ratio*100:.0f}%且不成比例），剩余 {len(filtered_depths)} 个峰")
-
-    pattern, is_normal, detail = classify_peaks(filtered_depths, tolerance)
-
-    print(f"\n判定结果: {pattern}")
-    print(f"是否正常: {'是' if is_normal else '否'}")
-    print(f"详情: {detail}")
-
-    return {
-        'pattern': pattern,
-        'is_normal': is_normal,
-        'peak_depths': list(peak_depths),
-        'detail': detail,
-    }
-
-
 def main_dual(
     spe_filepath,
     num_filepath,
@@ -247,7 +207,9 @@ def main_dual(
     min_width=10,
     tolerance=0.2,
     merge_tolerance=0.17,
-    low_depth_threshold=10,
+    merge_low_depth_abs=4,
+    merge_low_depth_threshold=30,
+    low_depth_threshold=11,
     low_peak_freq_ratio=0.6,
     verbose=True,
 ):
@@ -264,17 +226,27 @@ def main_dual(
     if verbose:
         print(f"SpeFreq.cut 检测到 {len(peak_depths_spe)} 个峰:")
         for d, f, ab in zip(peak_depths_spe, peak_freqs_spe, abnormal_flags_spe):
-            flag = " [异常峰型]" if ab else ""
+            flag = " [异常峰型，已过滤]" if ab else ""
             print(f"  depth={d:.0f}, frequency={f:.0f}{flag}")
         print(f"\nNumFreq.cut 检测到 {len(peak_depths_num)} 个峰:")
         for d, f, ab in zip(peak_depths_num, peak_freqs_num, abnormal_flags_num):
-            flag = " [异常峰型]" if ab else ""
+            flag = " [异常峰型，已过滤]" if ab else ""
             print(f"  depth={d:.0f}, frequency={f:.0f}{flag}")
 
+    # 过滤异常峰后再合并
+    spe_mask = np.array([not ab for ab in abnormal_flags_spe])
+    num_mask = np.array([not ab for ab in abnormal_flags_num])
+    peak_depths_spe_f = peak_depths_spe[spe_mask]
+    peak_freqs_spe_f = peak_freqs_spe[spe_mask]
+    peak_depths_num_f = peak_depths_num[num_mask]
+    peak_freqs_num_f = peak_freqs_num[num_mask]
+
     merged_peaks = merge_peaks(
-        (peak_depths_spe, peak_freqs_spe),
-        (peak_depths_num, peak_freqs_num),
-        merge_tolerance
+        (peak_depths_spe_f, peak_freqs_spe_f),
+        (peak_depths_num_f, peak_freqs_num_f),
+        merge_tolerance,
+        merge_low_depth_abs,
+        merge_low_depth_threshold,
     )
     total_count = len(merged_peaks)
 
@@ -300,14 +272,19 @@ def main_dual(
 
     if total_count == 3:
         sorted_peaks = sorted(merged_peaks, key=lambda x: x['depth'])
-        if sorted_peaks[2]['freq'] >= sorted_peaks[1]['freq'] * 0.7:
+        d1, d2, d3 = sorted_peaks[0]['depth'], sorted_peaks[1]['depth'], sorted_peaks[2]['depth']
+        f1, f2, f3 = sorted_peaks[0]['freq'], sorted_peaks[1]['freq'], sorted_peaks[2]['freq']
+        # 判断是否符合杂合二倍体模式：depth3 ≈ 2*depth1（纯合峰），且频率合理
+        depth_ratio_ok = abs(d3 / d1 - 2) / 2 <= tolerance if d1 > 0 else False
+        freq_ratio_ok = f3 >= f2 * 0.7
+        if depth_ratio_ok and freq_ratio_ok:
             pattern = 'diploid_hetero'
             is_normal = True
-            detail = f"3个峰，第3峰频率({sorted_peaks[2]['freq']:.0f})>=第2峰*0.7({sorted_peaks[1]['freq']*0.7:.0f})，判定为杂合二倍体"
+            detail = f"3个峰，depth=[{d1:.0f},{d2:.0f},{d3:.0f}]，第3峰depth≈2*第1峰且频率({f3:.0f})>=第2峰*0.7，判定为杂合二倍体"
         else:
-            depths = [sorted_peaks[0]['depth'], sorted_peaks[1]['depth']]
-            pattern, is_normal, detail = classify_peaks(depths, tolerance)
-            detail += f"（第3峰频率{sorted_peaks[2]['freq']:.0f}<第2峰*0.7，忽略）"
+            depths = [d1, d2]
+            pattern, is_normal, detail = classify_peaks(np.array(depths), tolerance)
+            detail += f"（第3峰不符合杂合二倍体模式，忽略）"
     else:
         depths = [p['depth'] for p in merged_peaks]
         pattern, is_normal, detail = classify_peaks(depths, tolerance)
@@ -328,7 +305,7 @@ def main_dual(
 
 
 if __name__ == '__main__':
-    base_path = '/data/work/zhurui/survey_rec/data/shenshaoqi_data/survey1/X101SC2508/X101SC25080220-Z02-J001/FDSW250023231-1r_HH-1-Hifi/HH-1-Hifi.17merFreq'
+    base_path = '/data/work/zhurui/survey_rec/data/shenshaoqi_data/survey1/X101SC2510/X101SC25105856-Z01-J004/FDSW250047713-1r_JBBY/JBBY.17merFreq'
     main_dual(
         spe_filepath=f'{base_path}.SpeFreq.cut',
         num_filepath=f'{base_path}.NumFreq.cut'
