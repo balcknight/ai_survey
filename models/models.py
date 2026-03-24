@@ -17,3 +17,5 @@ if __name__ == '__main__':
     response = llm.invoke(test_question)
     print("Qwen-Plus-LLM的回答：")  
     print(response)
+    # Qwen-Plus-LLM的回答：
+    # content='是的，**强烈建议在sRN...

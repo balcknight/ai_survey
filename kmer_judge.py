@@ -14,17 +14,36 @@ def load_data(filepath, depth_min=3, depth_max=300):
 
 
 def detect_peaks(df, smooth_window=11, smooth_poly=3,
-                 prominence_ratio=0.05, min_distance=10):
+                 prominence_ratio=0.05, min_distance=10, min_width=15):
     freq = df['Frequency'].values.astype(float)
     depth = df['Depth'].values
 
     freq_smooth = savgol_filter(freq, window_length=smooth_window, polyorder=smooth_poly)
 
     # 宽松条件找候选峰，再按峰自身高度相对最高峰的比例过滤
-    peaks_idx, properties = find_peaks(freq_smooth, distance=min_distance, prominence=0)
+    peaks_idx, properties = find_peaks(freq_smooth, distance=min_distance, prominence=0, width=0)
     if len(peaks_idx) > 0:
         max_peak_freq = freq_smooth[peaks_idx].max()
         peaks_idx = peaks_idx[freq_smooth[peaks_idx] >= max_peak_freq * prominence_ratio]
+
+    # 计算峰宽度并过滤（从峰顶向两侧查找局部最小值）
+    valid_peaks = []
+    for idx in peaks_idx:
+        # 左侧：从峰顶向左移动，直到频率不再递减（达到局部谷底）
+        left = idx
+        while left > 0 and freq_smooth[left - 1] < freq_smooth[left]:
+            left -= 1
+
+        # 右侧：从峰顶向右移动，直到频率不再递减（达到局部谷底）
+        right = idx
+        while right < len(freq_smooth) - 1 and freq_smooth[right + 1] < freq_smooth[right]:
+            right += 1
+
+        width = right - left
+        if width >= min_width:
+            valid_peaks.append(idx)
+
+    peaks_idx = np.array(valid_peaks)
 
     # 峰型异常检测：检查左侧鞍部是否过高
     abnormal_flags = []
@@ -52,6 +71,43 @@ def _match_ratios(actual_ratios, expected_ratios, tolerance):
     return True
 
 
+def filter_low_depth_peak(peak_depths, peak_freqs, tolerance=0.10,
+                          low_depth_threshold=10, low_peak_freq_ratio=0.6):
+    """
+    过滤深度<low_depth_threshold且高度不及最高峰low_peak_freq_ratio的第一个峰。
+    条件：第一个峰和第二个峰不成1:2比例，且第一个峰深度<阈值，且第一个峰高度<最高峰*比例。
+    """
+    if len(peak_depths) < 2:
+        return peak_depths, peak_freqs
+
+    sorted_indices = np.argsort(peak_depths)
+    sorted_depths = peak_depths[sorted_indices]
+    sorted_freqs = peak_freqs[sorted_indices]
+
+    first_depth = sorted_depths[0]
+    second_depth = sorted_depths[1]
+
+    # 只看第一个峰深度<阈值的情况
+    if first_depth >= low_depth_threshold:
+        return peak_depths, peak_freqs
+
+    # 检查第一个峰和第二个峰是否不成1:2比例
+    ratio = second_depth / first_depth
+    if abs(ratio - 2) / 2 <= tolerance:
+        # 成比例，不过滤
+        return peak_depths, peak_freqs
+
+    # 检查第一个峰高度是否不及最高峰的指定比例
+    max_freq = peak_freqs.max()
+    first_freq = sorted_freqs[0]
+    if first_freq < max_freq * low_peak_freq_ratio:
+        # 忽略第一个峰
+        mask = sorted_indices[1:]
+        return peak_depths[mask], peak_freqs[mask]
+
+    return peak_depths, peak_freqs
+
+
 def classify_peaks(peak_depths, tolerance=0.10):
     peak_depths = sorted(peak_depths)
     n = len(peak_depths)
@@ -68,21 +124,38 @@ def classify_peaks(peak_depths, tolerance=0.10):
     PATTERNS = [
         ('diploid_hetero',    [1, 2],    '杂合二倍体'),
         ('triploid',          [1, 2, 3], '三倍体'),
-        ('high_hetero_diplo', [1, 2, 4], '高杂合二倍体'),
+        ('high_repetitive_diplo', [1, 2, 4], '高重复二倍体'),
         ('tetraploid',        [1, 2, 3, 4], '四倍体'),
     ]
 
-    for name, expected, desc in PATTERNS:
-        if len(expected) != n:
-            continue
-        if _match_ratios(ratios, expected, tolerance):
-            ratio_str = ':'.join(map(str, expected))
-            depths_str = ', '.join(f'{d:.0f}' for d in peak_depths)
-            return name, True, f'{n}个峰，depth=[{depths_str}]，比值≈{ratio_str}，{desc}'
+    # 新逻辑：n>=2 时先检查 1:2，若不符合则直接停止；符合后再往下尝试更高倍体
+    if not _match_ratios(ratios[:2], [1, 2], tolerance):
+        ratio_str = ':'.join(f'{r:.2f}' for r in ratios)
+        depths_str = ', '.join(f'{d:.0f}' for d in peak_depths)
+        return 'unknown', False, f'{n}个峰，depth=[{depths_str}]，比值={ratio_str}，不符合1:2，停止判定'
 
-    ratio_str = ':'.join(f'{r:.2f}' for r in ratios)
-    depths_str = ', '.join(f'{d:.0f}' for d in peak_depths)
-    return 'unknown', False, f'{n}个峰，depth=[{depths_str}]，比值={ratio_str}，不匹配已知模式'
+    # 先尝试更高倍体判定，triploid/high_repetitive_diplo 同步看，然后尝试 tetraploid
+    best_match = None
+    best_len = 0
+    for name, expected, desc in PATTERNS[1:]:
+        if len(expected) > n:
+            continue
+        if _match_ratios(ratios[:len(expected)], expected, tolerance):
+            if len(expected) > best_len:
+                best_match = (name, expected, desc)
+                best_len = len(expected)
+
+    if best_match is not None:
+        name, expected, desc = best_match
+        ratio_str = ':'.join(map(str, expected))
+        depths_str = ', '.join(f'{d:.0f}' for d in peak_depths[:len(expected)])
+        return name, True, f'{n}个峰，depth=[{depths_str}]，比值≈{ratio_str}，{desc}'
+
+    # 1:2 符合，但没有更高倍体匹配 -> 视为杂合二倍体
+    ratio_str = ':'.join(map(str, [1, 2]))
+    depths_str = ', '.join(f'{d:.0f}' for d in peak_depths[:2])
+    return 'diploid_hetero', True, f'{n}个峰，depth=[{depths_str}]，比值≈{ratio_str}，杂合二倍体（其余峰未计入判定）'
+
 
 
 def merge_peaks(peaks1, peaks2, tolerance=0.15):
@@ -102,12 +175,16 @@ def merge_peaks(peaks1, peaks2, tolerance=0.15):
     while i < len(all_peaks):
         current = all_peaks[i].copy()
         j = i + 1
-        while j < len(all_peaks) and abs(all_peaks[j]['depth'] - current['depth']) <= tolerance * current['depth']:
-            if all_peaks[j]['freq'] > current['freq']:
-                current['freq'] = all_peaks[j]['freq']
-            current['depth'] = (current['depth'] + all_peaks[j]['depth']) / 2
-            current['source'] = 'both'
-            j += 1
+        while j < len(all_peaks):
+            max_delta = np.ceil(tolerance * current['depth'])
+            if abs(all_peaks[j]['depth'] - current['depth']) <= max_delta:
+                if all_peaks[j]['freq'] > current['freq']:
+                    current['freq'] = all_peaks[j]['freq']
+                current['depth'] = (current['depth'] + all_peaks[j]['depth']) / 2
+                current['source'] = 'both'
+                j += 1
+            else:
+                break
         merged.append(current)
         i = j
 
@@ -123,6 +200,8 @@ def main(
     prominence_ratio=0.01,
     min_distance=10,
     tolerance=0.2,
+    low_depth_threshold=10,
+    low_peak_freq_ratio=0.6,
     verbose=True,
 ):
     df = load_data(filepath, depth_min, depth_max)
@@ -136,7 +215,13 @@ def main(
             flag = " [异常峰型]" if ab else ""
             print(f"  depth={d:.0f}, frequency={f:.0f}{flag}")
 
-    pattern, is_normal, detail = classify_peaks(peak_depths, tolerance)
+    # 过滤深度<阈值且不成比例的低矮峰
+    filtered_depths, filtered_freqs = filter_low_depth_peak(
+        peak_depths, peak_freqs, tolerance, low_depth_threshold, low_peak_freq_ratio)
+    if len(filtered_depths) < len(peak_depths) and verbose:
+        print(f"已忽略深度<{low_depth_threshold}的第一个峰（高度不及最高峰{low_peak_freq_ratio*100:.0f}%且不成比例），剩余 {len(filtered_depths)} 个峰")
+
+    pattern, is_normal, detail = classify_peaks(filtered_depths, tolerance)
 
     print(f"\n判定结果: {pattern}")
     print(f"是否正常: {'是' if is_normal else '否'}")
@@ -157,20 +242,23 @@ def main_dual(
     depth_max=300,
     smooth_window=11,
     smooth_poly=3,
-    prominence_ratio=0.01,
+    prominence_ratio=0.05,
     min_distance=10,
+    min_width=10,
     tolerance=0.2,
-    merge_tolerance=0.15,
+    merge_tolerance=0.17,
+    low_depth_threshold=10,
+    low_peak_freq_ratio=0.6,
     verbose=True,
 ):
     df_spe = load_data(spe_filepath, depth_min, depth_max)
     peak_depths_spe, peak_freqs_spe, abnormal_flags_spe = detect_peaks(
-        df_spe, smooth_window, smooth_poly, prominence_ratio, min_distance
+        df_spe, smooth_window, smooth_poly, prominence_ratio, min_distance, min_width
     )
 
     df_num = load_data(num_filepath, depth_min, depth_max)
     peak_depths_num, peak_freqs_num, abnormal_flags_num = detect_peaks(
-        df_num, smooth_window, smooth_poly, prominence_ratio, min_distance
+        df_num, smooth_window, smooth_poly, prominence_ratio, min_distance, min_width
     )
 
     if verbose:
@@ -194,6 +282,21 @@ def main_dual(
         print(f"\n合并后总峰数: {total_count}")
         for p in merged_peaks:
             print(f"  depth={p['depth']:.0f}, frequency={p['freq']:.0f}, source={p['source']}")
+
+    # 过滤深度<阈值且不成比例的低矮峰
+    if total_count >= 2:
+        sorted_mp = sorted(merged_peaks, key=lambda x: x['depth'])
+        first_d = sorted_mp[0]['depth']
+        second_d = sorted_mp[1]['depth']
+        max_f = max(p['freq'] for p in merged_peaks)
+        first_f = sorted_mp[0]['freq']
+        if first_d < low_depth_threshold:
+            ratio_check = second_d / first_d if first_d > 0 else 999
+            if abs(ratio_check - 2) / 2 > tolerance and first_f < max_f * low_peak_freq_ratio:
+                merged_peaks = sorted_mp[1:]
+                total_count = len(merged_peaks)
+                if verbose:
+                    print(f"已忽略深度<{low_depth_threshold}的第一个峰（高度不及最高峰{low_peak_freq_ratio*100:.0f}%且不成比例），剩余 {total_count} 个峰")
 
     if total_count == 3:
         sorted_peaks = sorted(merged_peaks, key=lambda x: x['depth'])
@@ -225,7 +328,7 @@ def main_dual(
 
 
 if __name__ == '__main__':
-    base_path = 'data/shenshaoqi_data/survey1/X101SC2502/V-1/V-1.17merFreq'
+    base_path = '/data/work/zhurui/survey_rec/data/shenshaoqi_data/survey1/X101SC2508/X101SC25080220-Z02-J001/FDSW250023231-1r_HH-1-Hifi/HH-1-Hifi.17merFreq'
     main_dual(
         spe_filepath=f'{base_path}.SpeFreq.cut',
         num_filepath=f'{base_path}.NumFreq.cut'
