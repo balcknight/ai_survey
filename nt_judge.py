@@ -33,7 +33,7 @@ def get_species_category(species_name, llm):
 def check_ntcls(df_cls, target_species, llm):
     """
     检查all.ntcls.xls大类文件（打分制）
-    1.1 top1属于本物种所属类别：是=2.5分，否=0分
+    1.1 top1属于本物种所属类别：是=2分，否=0分
     1.2 细菌+真菌+病毒比例总和 < 本物种比例*10%（若本物种比例<5%则阈值为20%）：是=5分，否=0分
     返回 (score, detail, top1_pass, contamination_pass)
     """
@@ -49,6 +49,8 @@ def check_ntcls(df_cls, target_species, llm):
     for col in ['First', 'Second', 'Third', 'Fourth', 'Fifth']:
         if col in first_row:
             value = first_row[col]
+            if not isinstance(value, str):
+                continue
             if '(' in value and ')' in value:
                 cat_name = value.split('(')[0]
                 ratio = float(value.split('(')[1].rstrip(')'))
@@ -77,10 +79,10 @@ def check_ntcls(df_cls, target_species, llm):
     score = 0
     details = []
 
-    # 1.1 top1类别属于本物种 => 2.5分
+    # 1.1 top1类别属于本物种 => 2分
     if top1_category == target_category:
-        score += 2.5
-        details.append(f"Top1类别匹配({top1_category})，+2.5分")
+        score += 2
+        details.append(f"Top1类别匹配({top1_category})，+2分")
     else:
         details.append(f"Top1类别不匹配(Top1={top1_category}, 目标={target_category})，+0分")
 
@@ -112,7 +114,7 @@ def check_ntcls(df_cls, target_species, llm):
 def check_ntspe(df_spe, target_species, llm):
     """
     检查all.ntspe.xls小类文件（打分制）
-    规则：top6中细菌+真菌+病毒比例总和<2% => 2.5分，否则0分
+    规则：top6中细菌+真菌+病毒比例总和<2% => 3分，否则0分
     返回 (score, detail)
     """
     if df_spe is None or len(df_spe) == 0:
@@ -172,9 +174,9 @@ def check_ntspe(df_spe, target_species, llm):
     print(f"Top6中细菌+真菌+病毒比例总和: {contamination_sum:.2f}%")
 
     if contamination_sum < 2:
-        detail = f"ntspe得分=2.5分: 污染比例({contamination_sum:.2f}%)<2%，+2.5分"
+        detail = f"ntspe得分=3分: 污染比例({contamination_sum:.2f}%)<2%，+3分"
         print(f"  {detail}")
-        return 2.5, detail, True
+        return 3, detail, True
     else:
         detail = f"ntspe得分=0分: 污染比例({contamination_sum:.2f}%)>=2%，+0分"
         print(f"  {detail}")
@@ -184,7 +186,7 @@ def check_ntspe(df_spe, target_species, llm):
 def judge_nt_contamination(ntcls_path, ntspe_path, target_species):
     """
     综合判断NT比对结果（打分制）
-    总分10分：ntcls最高7.5分(2.5+5)，ntspe最高2.5分
+    总分10分：ntcls最高7分(2+5)，ntspe最高3分
     <4分: fail
     4<=score<6: 重度污染
     6<=score<8: 轻度污染
@@ -249,7 +251,7 @@ def judge_nt_contamination(ntcls_path, ntspe_path, target_species):
 
 if __name__ == '__main__':
     # 测试
-    base_path = 'data/FDES250026022-1a_Sdis'
+    base_path = '/data/work/zhurui/survey_rec/data/shenshaoqi_data/survey1/X101SC2512/X101SC251212246-Z03-J001/FDES250692881-1a_A02.GZ.02'
     result = judge_nt_contamination(
         ntcls_path=f'{base_path}/all.ntcls.xls',
         ntspe_path=f'{base_path}/all.ntspe.xls',
