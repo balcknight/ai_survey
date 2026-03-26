@@ -136,7 +136,7 @@ def check_ntspe(df_spe, target_species, llm):
     first_row = df_spe.iloc[0]
     comparison_cols = [
         'The first comparison', 'The second comparison', 'The third comparison',
-        'The fourth comparison', 'The fifth comparison', 'The sixth comparison'
+        'The Fourth comparsion', 'The Fifth comparsion', 'The Sixth comparsion'
     ]
 
     contamination_sum = 0

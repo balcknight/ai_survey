@@ -14,17 +14,25 @@ def load_data(filepath, depth_min=3, depth_max=300):
 
 
 def detect_peaks(df, smooth_window=11, smooth_poly=3,
-                 prominence_ratio=0.05, min_distance=10, min_width=15):
+                 prominence_ratio=0.05, min_distance=10, min_width=15,
+                 left_min_threshold=0.33, detect_shoulder=True,
+                 shoulder_min_freq_ratio=0.3):
     freq = df['Frequency'].values.astype(float)
     depth = df['Depth'].values
 
     freq_smooth = savgol_filter(freq, window_length=smooth_window, polyorder=smooth_poly)
 
-    # 宽松条件找候选峰，再按峰自身高度相对最高峰的比例过滤
+    # 宽松条件找候选峰，再按 prominence 相对最高峰的比例过滤
     peaks_idx, properties = find_peaks(freq_smooth, distance=min_distance, prominence=0, width=0)
     if len(peaks_idx) > 0:
+        prominences = properties['prominences']
+        max_prominence = prominences.max()
+        # 同时满足：prominence 达到最高峰 prominence 的 prominence_ratio 比例
+        # 且频率达到最高峰频率的 prominence_ratio 比例
         max_peak_freq = freq_smooth[peaks_idx].max()
-        peaks_idx = peaks_idx[freq_smooth[peaks_idx] >= max_peak_freq * prominence_ratio]
+        mask = (prominences >= max_prominence * prominence_ratio) & \
+               (freq_smooth[peaks_idx] >= max_peak_freq * prominence_ratio)
+        peaks_idx = peaks_idx[mask]
 
     # 计算峰宽度并过滤（从峰顶向两侧查找局部最小值）
     valid_peaks = []
@@ -43,25 +51,57 @@ def detect_peaks(df, smooth_window=11, smooth_poly=3,
         if width >= min_width:
             valid_peaks.append(idx)
 
-    peaks_idx = np.array(valid_peaks)
+    peaks_idx = np.array(valid_peaks, dtype=int)
 
-    # 峰型异常检测：检查左侧鞍部是否过高
+    # 肩峰检测：在上升段找一阶导数的局部极小值（增长减缓处）
+    if detect_shoulder and len(freq_smooth) > smooth_window:
+        d1 = np.gradient(freq_smooth)
+        d1_smooth = savgol_filter(d1, window_length=smooth_window, polyorder=smooth_poly)
+
+        # 一阶导数的局部极小值 = 增长速率最慢的位置
+        neg_d1 = -d1_smooth
+        shoulder_candidates, _ = find_peaks(neg_d1, distance=min_distance)
+
+        # 全局最高频率（用于高度过滤）
+        global_max_freq = freq_smooth.max()
+
+        for s_idx in shoulder_candidates:
+            # 条件1：仍在上升段（一阶导数>0）
+            if d1_smooth[s_idx] <= 0:
+                continue
+            # 条件2：频率高度达到全局最高峰的shoulder_min_freq_ratio（肩峰用更高阈值）
+            if freq_smooth[s_idx] < global_max_freq * shoulder_min_freq_ratio:
+                continue
+            # 条件3：不与已有的普通峰太近
+            if len(peaks_idx) > 0 and np.min(np.abs(peaks_idx - s_idx)) < min_distance:
+                continue
+            # 加入峰列表
+            peaks_idx = np.append(peaks_idx, s_idx)
+
+        # 重新排序
+        peaks_idx = np.sort(peaks_idx)
+
+    # 峰型异常检测：检查主峰左侧最低点
     abnormal_flags = []
-    for i, idx in enumerate(peaks_idx):
-        peak_freq = freq_smooth[idx]
-        # 找峰左侧的局部最小值（鞍部）
-        left_min = freq_smooth[:idx].min() if idx > 0 else 0
+    is_abnormal = False
+    if len(peaks_idx) > 0:
+        # 找到主峰（最高峰）
+        main_peak_idx = peaks_idx[np.argmax(freq_smooth[peaks_idx])]
+        main_peak_freq = freq_smooth[main_peak_idx]
 
-        # 左侧鞍部占峰高度比例过高则标记为异常
-        if peak_freq > 0:
-            left_ratio = left_min / peak_freq
-            abnormal_flags.append(left_ratio > 0.9)  # 左侧鞍部超过峰高90%视为异常
-        else:
-            abnormal_flags.append(False)
+        # 找主峰左侧的最低点
+        left_min = freq_smooth[:main_peak_idx].min() if main_peak_idx > 0 else 0
+        left_ratio = left_min / main_peak_freq if main_peak_freq > 0 else 0
+
+        # 使用传入的阈值判断
+        is_abnormal = left_ratio > left_min_threshold
+
+        # 所有峰共享同一个异常标记
+        abnormal_flags = [is_abnormal] * len(peaks_idx)
 
     peak_depths = depth[peaks_idx]
     peak_freqs = freq_smooth[peaks_idx]
-    return peak_depths, peak_freqs, abnormal_flags
+    return peak_depths, peak_freqs, abnormal_flags, is_abnormal
 
 
 def _match_ratios(actual_ratios, expected_ratios, tolerance):
@@ -215,16 +255,21 @@ def main_dual(
     merge_low_depth_threshold=30,
     low_depth_threshold=11,
     low_peak_freq_ratio=0.6,
+    spe_left_min_threshold=0.6,
+    num_left_min_threshold=0.6,
+    shoulder_min_freq_ratio=0.3,
     verbose=True,
 ):
     df_spe = load_data(spe_filepath, depth_min, depth_max)
-    peak_depths_spe, peak_freqs_spe, abnormal_flags_spe = detect_peaks(
-        df_spe, smooth_window, smooth_poly, prominence_ratio, min_distance, min_width
+    peak_depths_spe, peak_freqs_spe, abnormal_flags_spe, is_abnormal_spe = detect_peaks(
+        df_spe, smooth_window, smooth_poly, prominence_ratio, min_distance, min_width, spe_left_min_threshold,
+        shoulder_min_freq_ratio=shoulder_min_freq_ratio
     )
 
     df_num = load_data(num_filepath, depth_min, depth_max)
-    peak_depths_num, peak_freqs_num, abnormal_flags_num = detect_peaks(
-        df_num, smooth_window, smooth_poly, prominence_ratio, min_distance, min_width
+    peak_depths_num, peak_freqs_num, abnormal_flags_num, is_abnormal_num = detect_peaks(
+        df_num, smooth_window, smooth_poly, prominence_ratio, min_distance, min_width, num_left_min_threshold,
+        shoulder_min_freq_ratio=shoulder_min_freq_ratio
     )
 
     if verbose:
@@ -238,8 +283,8 @@ def main_dual(
             print(f"  depth={d:.0f}, frequency={f:.0f}{flag}")
 
     # 过滤异常峰后再合并
-    spe_mask = np.array([not ab for ab in abnormal_flags_spe])
-    num_mask = np.array([not ab for ab in abnormal_flags_num])
+    spe_mask = np.array([not ab for ab in abnormal_flags_spe], dtype=bool)
+    num_mask = np.array([not ab for ab in abnormal_flags_num], dtype=bool)
     peak_depths_spe_f = peak_depths_spe[spe_mask]
     peak_freqs_spe_f = peak_freqs_spe[spe_mask]
     peak_depths_num_f = peak_depths_num[num_mask]
@@ -259,6 +304,48 @@ def main_dual(
         print(f"\n单独过滤低深度峰后:")
         print(f"  SpeFreq: {len(peak_depths_spe_f)} 个峰 {list(peak_depths_spe_f)}")
         print(f"  NumFreq: {len(peak_depths_num_f)} 个峰 {list(peak_depths_num_f)}")
+
+    # 如果 spe 或 num 检测到 0 个峰，直接判为异常
+    if len(peak_depths_spe) == 0 or len(peak_depths_num) == 0:
+        zero_source = []
+        if len(peak_depths_spe) == 0:
+            zero_source.append('SpeFreq')
+        if len(peak_depths_num) == 0:
+            zero_source.append('NumFreq')
+        detail = f"{'/'.join(zero_source)} 未检测到任何峰，数据异常"
+        if verbose:
+            print(f"\n判定结果: no_peak_detected")
+            print(f"是否正常: 否")
+            print(f"详情: {detail}")
+        return {
+            'spe_peaks': {'depths': list(peak_depths_spe), 'freqs': list(peak_freqs_spe)},
+            'num_peaks': {'depths': list(peak_depths_num), 'freqs': list(peak_freqs_num)},
+            'merged_peaks': [],
+            'total_peak_count': 0,
+            'pattern': 'no_peak_detected',
+            'is_normal': False,
+            'detail': detail,
+        }
+
+    # 综合判断前检测：如果 spe 或 num 任一异常，直接判为异常
+    if is_abnormal_spe or is_abnormal_num:
+        abnormal_source = []
+        if is_abnormal_spe:
+            abnormal_source.append('SpeFreq')
+        if is_abnormal_num:
+            abnormal_source.append('NumFreq')
+        print(f"\n判定结果: peak_shape_abnormal")
+        print(f"是否正常: 否")
+        print(f"详情: {'/'.join(abnormal_source)} 主峰左侧最低点过高，峰型异常")
+        return {
+            'spe_peaks': {'depths': list(peak_depths_spe), 'freqs': list(peak_freqs_spe)},
+            'num_peaks': {'depths': list(peak_depths_num), 'freqs': list(peak_freqs_num)},
+            'merged_peaks': [],
+            'total_peak_count': 0,
+            'pattern': 'peak_shape_abnormal',
+            'is_normal': False,
+            'detail': f"{'/'.join(abnormal_source)} 主峰左侧最低点过高，峰型异常",
+        }
 
     merged_peaks = merge_peaks(
         (peak_depths_spe_f, peak_freqs_spe_f),
@@ -309,7 +396,7 @@ def main_dual(
 
 
 if __name__ == '__main__':
-    base_path = '/data/work/zhurui/survey_rec/data/shenshaoqi_data/survey1/X101SC2508/X101SC25083784-Z01-J001/FDSW250024085-1r_叶片1/叶片1.17merFreq'
+    base_path = '/data/work/zhurui/survey_rec/data/shenshaoqi_data/survey1/X101SC2505/X101SC25055142-Z01-J004/FDSW250203670-2r_QM-Y1/QM-Y1.17merFreq'
     main_dual(
         spe_filepath=f'{base_path}.SpeFreq.cut',
         num_filepath=f'{base_path}.NumFreq.cut'
