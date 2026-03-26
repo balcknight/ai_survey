@@ -14,7 +14,7 @@ def load_data(filepath, depth_min=3, depth_max=300):
 
 
 def detect_peaks(df, smooth_window=11, smooth_poly=3,
-                 prominence_ratio=0.05, min_distance=10, min_width=15,
+                 prominence_ratio=0.04, min_distance=10, min_width=15,
                  left_min_threshold=0.33, detect_shoulder=True,
                  shoulder_min_freq_ratio=0.3):
     freq = df['Frequency'].values.astype(float)
@@ -112,9 +112,9 @@ def _match_ratios(actual_ratios, expected_ratios, tolerance):
 
 
 def filter_low_depth_peak(peak_depths, peak_freqs, tolerance=0.10,
-                          low_depth_threshold=10, low_peak_freq_ratio=0.6):
+                          low_depth_ratio=0.3, low_peak_freq_ratio=0.6):
     """
-    过滤深度<low_depth_threshold且高度不及最高峰low_peak_freq_ratio的第一个峰。
+    过滤低深度污染峰。阈值为主峰深度的low_depth_ratio（默认20%）。
     条件：第一个峰和第二个峰不成1:2比例，且第一个峰深度<阈值，且第一个峰高度<最高峰*比例。
     """
     if len(peak_depths) < 2:
@@ -124,11 +124,16 @@ def filter_low_depth_peak(peak_depths, peak_freqs, tolerance=0.10,
     sorted_depths = peak_depths[sorted_indices]
     sorted_freqs = peak_freqs[sorted_indices]
 
+    # 动态计算阈值：主峰（频率最高的峰）深度的 low_depth_ratio
+    main_peak_idx = np.argmax(peak_freqs)
+    main_peak_depth = peak_depths[main_peak_idx]
+    low_depth_threshold = main_peak_depth * low_depth_ratio
+
     first_depth = sorted_depths[0]
     second_depth = sorted_depths[1]
 
-    # 只看第一个峰深度<阈值的情况
-    if first_depth >= low_depth_threshold:
+    # 只看第一个峰深度<=阈值的情况
+    if first_depth > low_depth_threshold:
         return peak_depths, peak_freqs
 
     # 检查第一个峰和第二个峰是否不成1:2比例
@@ -246,16 +251,16 @@ def main_dual(
     depth_max=300,
     smooth_window=11,
     smooth_poly=3,
-    prominence_ratio=0.05,
+    prominence_ratio=0.04,
     min_distance=10,
     min_width=10,
-    tolerance=0.2,
+    tolerance=0.15,
     merge_tolerance=0.17,
-    merge_low_depth_abs=4,
+    merge_low_depth_abs=7,
     merge_low_depth_threshold=30,
-    low_depth_threshold=11,
+    low_depth_ratio=0.25,
     low_peak_freq_ratio=0.6,
-    spe_left_min_threshold=0.6,
+    spe_left_min_threshold=0.7,
     num_left_min_threshold=0.6,
     shoulder_min_freq_ratio=0.3,
     verbose=True,
@@ -293,11 +298,11 @@ def main_dual(
     # 在合并前对每份数据单独过滤低深度噪声峰
     peak_depths_spe_f, peak_freqs_spe_f = filter_low_depth_peak(
         peak_depths_spe_f, peak_freqs_spe_f, tolerance,
-        low_depth_threshold, low_peak_freq_ratio
+        low_depth_ratio, low_peak_freq_ratio
     )
     peak_depths_num_f, peak_freqs_num_f = filter_low_depth_peak(
         peak_depths_num_f, peak_freqs_num_f, tolerance,
-        low_depth_threshold, low_peak_freq_ratio
+        low_depth_ratio, low_peak_freq_ratio
     )
 
     if verbose:
@@ -346,6 +351,37 @@ def main_dual(
             'is_normal': False,
             'detail': f"{'/'.join(abnormal_source)} 主峰左侧最低点过高，峰型异常",
         }
+
+    # 分别对 spe 和 num 单独判定
+    spe_pattern, spe_is_normal, spe_detail = classify_peaks(list(peak_depths_spe_f), tolerance)
+    num_pattern, num_is_normal, num_detail = classify_peaks(list(peak_depths_num_f), tolerance)
+
+    if verbose:
+        print(f"\n单独判定:")
+        print(f"  SpeFreq: {spe_pattern}, 正常={spe_is_normal}, {spe_detail}")
+        print(f"  NumFreq: {num_pattern}, 正常={num_is_normal}, {num_detail}")
+
+    # 如果 spe 和 num 同时正常或同时异常，直接返回，不再综合判定
+    if spe_is_normal == num_is_normal:
+        pattern = spe_pattern if spe_is_normal else f"{spe_pattern}+{num_pattern}"
+        is_normal = spe_is_normal
+        detail = f"SpeFreq与NumFreq判定一致（均{'正常' if is_normal else '异常'}），跳过综合判定。SpeFreq: {spe_detail}; NumFreq: {num_detail}"
+        if verbose:
+            print(f"\n判定结果: {pattern}")
+            print(f"是否正常: {'是' if is_normal else '否'}")
+            print(f"详情: {detail}")
+        return {
+            'spe_peaks': {'depths': list(peak_depths_spe), 'freqs': list(peak_freqs_spe)},
+            'num_peaks': {'depths': list(peak_depths_num), 'freqs': list(peak_freqs_num)},
+            'merged_peaks': [],
+            'total_peak_count': 0,
+            'pattern': pattern,
+            'is_normal': is_normal,
+            'detail': detail,
+        }
+
+    if verbose:
+        print(f"\nSpeFreq与NumFreq判定不一致，进入综合判定...")
 
     merged_peaks = merge_peaks(
         (peak_depths_spe_f, peak_freqs_spe_f),
@@ -396,7 +432,12 @@ def main_dual(
 
 
 if __name__ == '__main__':
-    base_path = '/data/work/zhurui/survey_rec/data/shenshaoqi_data/survey1/X101SC2505/X101SC25055142-Z01-J004/FDSW250203670-2r_QM-Y1/QM-Y1.17merFreq'
+        # base_path = '/data/work/zhurui/survey_rec/data/shenshaoqi_data/survey1/X101SC2505/X101SC25052754-Z01-J003/FDSW250015640-1r_Z260/Z260.17merFreq'
+        # base_path = '/data/work/zhurui/survey_rec/data/shenshaoqi_data/survey1/X101SC2512/X101SC25128167-Z02-J001/FDSW250056115-1r_9_1/9_1.17merFreq'
+        #    左侧鞍部干掉 base_path = '/data/work/zhurui/survey_rec/data/shenshaoqi_data/survey1/X101SC2511/X101SC25114474-Z02-J002/FDSW250056744-1r_1/1.17merFreq'
+
+
+    base_path = '/data/work/zhurui/survey_rec/data/shenshaoqi_data/survey1/X101SC2511/X101SC25114026-Z01-J001/FDSW250052241-1a_YB/YB.17merFreq'
     main_dual(
         spe_filepath=f'{base_path}.SpeFreq.cut',
         num_filepath=f'{base_path}.NumFreq.cut'
