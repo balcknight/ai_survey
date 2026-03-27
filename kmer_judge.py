@@ -16,7 +16,7 @@ def load_data(filepath, depth_min=3, depth_max=300):
 def detect_peaks(df, smooth_window=11, smooth_poly=3,
                  prominence_ratio=0.04, min_distance=10, min_width=15,
                  left_min_threshold=0.33, detect_shoulder=True,
-                 shoulder_min_freq_ratio=0.3):
+                 shoulder_min_freq_ratio=0.3, shoulder_min_d1_ratio=0.30):
     freq = df['Frequency'].values.astype(float)
     depth = df['Depth'].values
 
@@ -65,11 +65,16 @@ def detect_peaks(df, smooth_window=11, smooth_poly=3,
         # 全局最高频率（用于高度过滤）
         global_max_freq = freq_smooth.max()
 
+        max_d1 = d1_smooth.max()
+
         for s_idx in shoulder_candidates:
             # 条件1：仍在上升段（一阶导数>0）
             if d1_smooth[s_idx] <= 0:
                 continue
-            # 条件2：频率高度达到全局最高峰的shoulder_min_freq_ratio（肩峰用更高阈值）
+            # 条件2：导数值足够大（排除微弱的减速点）
+            if d1_smooth[s_idx] < max_d1 * shoulder_min_d1_ratio:
+                continue
+            # 条件3：频率高度达到全局最高峰的shoulder_min_freq_ratio（肩峰用更高阈值）
             if freq_smooth[s_idx] < global_max_freq * shoulder_min_freq_ratio:
                 continue
             # 条件3：不与已有的普通峰太近
@@ -77,6 +82,30 @@ def detect_peaks(df, smooth_window=11, smooth_poly=3,
                 continue
             # 加入峰列表
             peaks_idx = np.append(peaks_idx, s_idx)
+
+        # 平台型肩峰检测：找一阶导数由正变负的零交叉点（上升段中的微弱局部峰/平台）
+        # 这类点 prominence 极低，普通峰检测会漏掉，但人眼可见
+        for i in range(1, len(d1_smooth)):
+            # 找零交叉：前一点 d1>0，当前点 d1<=0
+            if d1_smooth[i - 1] > 0 and d1_smooth[i] <= 0:
+                # 取零交叉附近频率较高的那个点作为平台峰位置
+                plat_idx = i - 1 if freq_smooth[i - 1] >= freq_smooth[i] else i
+                # 条件1：频率高度达到全局最高峰的 shoulder_min_freq_ratio
+                if freq_smooth[plat_idx] < global_max_freq * shoulder_min_freq_ratio:
+                    continue
+                # 条件2：不与已有峰太近
+                if len(peaks_idx) > 0 and np.min(np.abs(peaks_idx - plat_idx)) < min_distance:
+                    continue
+                # 条件3：零交叉后频率需要先下降再回升（排除单调上升中的噪声抖动）
+                # 检查右侧是否存在一个局部最低点，且之后频率回升
+                right_region = freq_smooth[plat_idx:min(plat_idx + min_distance * 2, len(freq_smooth))]
+                if len(right_region) > 2:
+                    min_after = right_region[1:].min()
+                    max_after = right_region[1:].max()
+                    # 需要右侧先下降（有低于平台的点）且之后回升
+                    if min_after >= freq_smooth[plat_idx] or max_after <= min_after:
+                        continue
+                peaks_idx = np.append(peaks_idx, plat_idx)
 
         # 重新排序
         peaks_idx = np.sort(peaks_idx)
@@ -206,7 +235,6 @@ def classify_peaks(peak_depths, tolerance=0.10):
     return 'diploid_hetero', True, f'{n}个峰，depth=[{depths_str}]，比值≈{ratio_str}，杂合二倍体（其余峰未计入判定）'
 
 
-
 def merge_peaks(peaks1, peaks2, tolerance=0.15, low_depth_abs=8, low_depth_threshold=50):
     depths1, freqs1 = peaks1
     depths2, freqs2 = peaks2
@@ -251,7 +279,7 @@ def main_dual(
     depth_max=300,
     smooth_window=11,
     smooth_poly=3,
-    prominence_ratio=0.04,
+    prominence_ratio=0.009,
     min_distance=10,
     min_width=10,
     tolerance=0.15,
@@ -437,7 +465,7 @@ if __name__ == '__main__':
         #    左侧鞍部干掉 base_path = '/data/work/zhurui/survey_rec/data/shenshaoqi_data/survey1/X101SC2511/X101SC25114474-Z02-J002/FDSW250056744-1r_1/1.17merFreq'
 
 
-    base_path = '/data/work/zhurui/survey_rec/data/shenshaoqi_data/survey1/X101SC2511/X101SC25114026-Z01-J001/FDSW250052241-1a_YB/YB.17merFreq'
+    base_path = '/data/work/zhurui/survey_rec/data/shenshaoqi_data/survey1/X101SC2505/X101SC25052754-Z01-J003/FDSW250015640-1r_Z260/Z260.17merFreq'
     main_dual(
         spe_filepath=f'{base_path}.SpeFreq.cut',
         num_filepath=f'{base_path}.NumFreq.cut'

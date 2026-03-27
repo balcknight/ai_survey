@@ -172,9 +172,14 @@ def judge_sample(sample_dir, verbose=False):
                 result['should_transfer'] = '是'
                 result['remark'] = ''
         else:  # fail
-            result['final_level'] = '重度污染'
-            result['should_transfer'] = '否'
-            result['remark'] = ''
+            if nt_score >= 3:
+                result['final_level'] = '轻度污染'
+                result['should_transfer'] = '是'
+                result['remark'] = ''
+            else:
+                result['final_level'] = '重度污染'
+                result['should_transfer'] = '否'
+                result['remark'] = 'NT得分<=2分，不建议流转'
     else:
         # kmer异常
         if nt_level == '正常':
