@@ -282,7 +282,7 @@ def main_dual(
     prominence_ratio=0.009,
     min_distance=10,
     min_width=10,
-    tolerance=0.15,
+    tolerance=0.16,
     merge_tolerance=0.17,
     merge_low_depth_abs=7,
     merge_low_depth_threshold=30,
