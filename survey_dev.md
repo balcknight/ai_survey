@@ -148,6 +148,7 @@ NT打分等级：
 
 ### 判定脚本
 nohup /data/home/zhurui/.conda/envs/zhurui_agent/bin/python survey_judge.py --max 2 > survey_judge.log 2>&1 &
+nohup /data/home/zhurui/.conda/envs/zhurui_agent/bin/python survey_judge.py > survey_judge.log 2>&1 &
 
 ### 综合判定逻辑
 
@@ -338,3 +339,8 @@ prominence = 峰顶频率 - 基准线 = 4,706,528 - 4,527,555 ≈ 178,973
 所以 prominence 衡量的是"把这个峰淹没需要多少水"，而不是峰的绝对高度。
 
 现在把 prominence_ratio 从 0.05 降到 0.04，让 0.0486 能通过。
+
+### 优化v4
+1.NT大类算所有比例的10%，而不是固定10%
+2.大类里面，改为非本类加一起小于所有比例的10%才算通过
+2.小类不再卡固定的2%，改为top1的10%（如果top1<5%，则为20%）

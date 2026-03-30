@@ -34,7 +34,7 @@ def check_ntcls(df_cls, target_species, llm):
     """
     检查all.ntcls.xls大类文件（打分制）
     1.1 top1属于本物种所属类别：是=2分，否=0分
-    1.2 细菌+真菌+病毒比例总和 < 本物种比例*10%（若本物种比例<5%则阈值为20%）：是=5分，否=0分
+    1.2 非本物种比例总和 < 所有物种比例的10%：是=5分，否=0分
     返回 (score, detail, top1_pass, contamination_pass)
     """
     if df_cls is None or len(df_cls) == 0:
@@ -86,36 +86,32 @@ def check_ntcls(df_cls, target_species, llm):
     else:
         details.append(f"Top1类别不匹配(Top1={top1_category}, 目标={target_category})，+0分")
 
-    # 1.2 细菌+真菌+病毒比例总和 < 本物种比例的阈值 => 5分
-    # 若本物种比例<5%，阈值为本物种比例*20%；否则阈值为本物种比例*10%
-    contamination_sum = categories.get('Bacteria', 0) + categories.get('Fungi', 0) + categories.get('Viruses', 0)
-    if top1_ratio < 5:
-        threshold_pct = 20
-    else:
-        threshold_pct = 10
-    contamination_threshold = top1_ratio * threshold_pct / 100
-    print(f"细菌+真菌+病毒比例总和: {contamination_sum:.2f}%, 本物种比例: {top1_ratio:.2f}%, 阈值: {contamination_threshold:.2f}% ({threshold_pct}%)")
+    # 1.2 非本物种比例总和 < 所有物种比例的10% => 5分
+    all_species_sum = sum(categories.values())
+    non_target_sum = all_species_sum - top1_ratio
+    contamination_threshold = all_species_sum * 0.10
+    print(f"非本物种比例总和: {non_target_sum:.2f}%, 所有物种比例: {all_species_sum:.2f}%, 阈值: {contamination_threshold:.2f}% (10%)")
 
-    if contamination_sum < contamination_threshold:
+    if non_target_sum < contamination_threshold:
         score += 5
-        details.append(f"污染比例({contamination_sum:.2f}%)<本物种{top1_ratio:.2f}%的{threshold_pct}%({contamination_threshold:.2f}%)，+5分")
+        details.append(f"非本物种比例({non_target_sum:.2f}%)<所有物种{all_species_sum:.2f}%的10%({contamination_threshold:.2f}%)，+5分")
     else:
-        details.append(f"污染比例({contamination_sum:.2f}%)>=本物种{top1_ratio:.2f}%的{threshold_pct}%({contamination_threshold:.2f}%)，+0分")
+        details.append(f"非本物种比例({non_target_sum:.2f}%)>=所有物种{all_species_sum:.2f}%的10%({contamination_threshold:.2f}%)，+0分")
 
     detail = f"ntcls得分={score}分: {'; '.join(details)}"
     print(f"  {detail}")
 
     # 返回子判断结果
     top1_pass = (top1_category == target_category)
-    contamination_pass = (contamination_sum < contamination_threshold)
+    contamination_pass = (non_target_sum < contamination_threshold)
     return score, detail, top1_pass, contamination_pass
 
 
 def check_ntspe(df_spe, target_species, llm):
     """
     检查all.ntspe.xls小类文件（打分制）
-    规则：top6中细菌+真菌+病毒比例总和<2% => 3分，否则0分
-    返回 (score, detail)
+    规则：top6中细菌+真菌+病毒比例总和<top1的10%（若top1<5%则为20%） => 3分，否则0分
+    返回 (score, detail, contamination_pass)
     """
     if df_spe is None or len(df_spe) == 0:
         return 0, "ntspe文件为空"
@@ -141,6 +137,7 @@ def check_ntspe(df_spe, target_species, llm):
 
     contamination_sum = 0
     parsed_count = 0
+    top1_ratio = 0
 
     for i, col in enumerate(comparison_cols):
         if col not in first_row:
@@ -163,22 +160,32 @@ def check_ntspe(df_spe, target_species, llm):
 
         print(f"Top{i+1}: {category_cn} - {species_info} ({ratio:.2f}%)")
 
+        if i == 0:
+            top1_ratio = ratio
+
         if category_en in contamination_categories:
             contamination_sum += ratio
 
         parsed_count += 1
 
     if parsed_count == 0:
-        return 0, "没有找到比对数据"
+        return 0, "没有找到比对数据", False
 
-    print(f"Top6中细菌+真菌+病毒比例总和: {contamination_sum:.2f}%")
+    # 动态阈值：若top1<5%则为20%，否则为10%
+    if top1_ratio < 5:
+        threshold_pct = 20
+    else:
+        threshold_pct = 10
+    contamination_threshold = top1_ratio * threshold_pct / 100
 
-    if contamination_sum < 2:
-        detail = f"ntspe得分=3分: 污染比例({contamination_sum:.2f}%)<2%，+3分"
+    print(f"Top6中细菌+真菌+病毒比例总和: {contamination_sum:.2f}%, Top1比例: {top1_ratio:.2f}%, 阈值: {contamination_threshold:.2f}% ({threshold_pct}%)")
+
+    if contamination_sum < contamination_threshold:
+        detail = f"ntspe得分=3分: 污染比例({contamination_sum:.2f}%)<Top1的{threshold_pct}%({contamination_threshold:.2f}%)，+3分"
         print(f"  {detail}")
         return 3, detail, True
     else:
-        detail = f"ntspe得分=0分: 污染比例({contamination_sum:.2f}%)>=2%，+0分"
+        detail = f"ntspe得分=0分: 污染比例({contamination_sum:.2f}%)>=Top1的{threshold_pct}%({contamination_threshold:.2f}%)，+0分"
         print(f"  {detail}")
         return 0, detail, False
 

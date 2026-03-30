@@ -197,7 +197,7 @@ def judge_sample(sample_dir, verbose=False):
     return result
 
 
-def run_all(max_samples=None, verbose=False, output_path=None):
+def run_all(max_samples=None, verbose=True, output_path=None):
     """
     批量处理Excel中所有样本，结果写入新的Excel文件
     """
@@ -226,6 +226,9 @@ def run_all(max_samples=None, verbose=False, output_path=None):
             continue
 
         res = judge_sample(sample_dir, verbose=verbose)
+
+        if verbose:
+            print(f"  判定结果: {res}")
 
         df.at[i, 'kmer峰型'] = KMER_PATTERN_CN.get(res.get('kmer_pattern', ''), res.get('kmer_pattern', ''))
         df.at[i, 'kmer是否正常'] = '正常' if res.get('kmer_normal') else '异常'
@@ -280,7 +283,7 @@ if __name__ == '__main__':
 
     parser = argparse.ArgumentParser(description='Survey联合判定')
     parser.add_argument('--max', type=int, default=None, help='最多处理样本数（测试用）')
-    parser.add_argument('--verbose', action='store_true', help='打印详细过程')
+    parser.add_argument('--verbose', action='store_true', default=True, help='打印详细过程')
     args = parser.parse_args()
 
     run_all(max_samples=args.max, verbose=args.verbose)

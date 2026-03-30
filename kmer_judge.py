@@ -290,7 +290,7 @@ def main_dual(
     low_peak_freq_ratio=0.6,
     spe_left_min_threshold=0.7,
     num_left_min_threshold=0.6,
-    shoulder_min_freq_ratio=0.3,
+    shoulder_min_freq_ratio=0.25,
     verbose=True,
 ):
     df_spe = load_data(spe_filepath, depth_min, depth_max)
@@ -389,14 +389,14 @@ def main_dual(
         print(f"  SpeFreq: {spe_pattern}, 正常={spe_is_normal}, {spe_detail}")
         print(f"  NumFreq: {num_pattern}, 正常={num_is_normal}, {num_detail}")
 
-    # 如果 spe 和 num 同时正常或同时异常，直接返回，不再综合判定
-    if spe_is_normal == num_is_normal:
-        pattern = spe_pattern if spe_is_normal else f"{spe_pattern}+{num_pattern}"
-        is_normal = spe_is_normal
-        detail = f"SpeFreq与NumFreq判定一致（均{'正常' if is_normal else '异常'}），跳过综合判定。SpeFreq: {spe_detail}; NumFreq: {num_detail}"
+    # 新逻辑：只要有一个不合格就判定为不合格
+    if not spe_is_normal or not num_is_normal:
+        pattern = f"{spe_pattern}+{num_pattern}"
+        is_normal = False
+        detail = f"SpeFreq或NumFreq有不合格项。SpeFreq: {spe_detail}; NumFreq: {num_detail}"
         if verbose:
             print(f"\n判定结果: {pattern}")
-            print(f"是否正常: {'是' if is_normal else '否'}")
+            print(f"是否正常: 否")
             print(f"详情: {detail}")
         return {
             'spe_peaks': {'depths': list(peak_depths_spe), 'freqs': list(peak_freqs_spe)},
@@ -408,51 +408,20 @@ def main_dual(
             'detail': detail,
         }
 
+    # 两个都合格，返回正常
+    pattern = spe_pattern
+    is_normal = True
+    detail = f"SpeFreq与NumFreq均合格。SpeFreq: {spe_detail}; NumFreq: {num_detail}"
     if verbose:
-        print(f"\nSpeFreq与NumFreq判定不一致，进入综合判定...")
-
-    merged_peaks = merge_peaks(
-        (peak_depths_spe_f, peak_freqs_spe_f),
-        (peak_depths_num_f, peak_freqs_num_f),
-        merge_tolerance,
-        merge_low_depth_abs,
-        merge_low_depth_threshold,
-    )
-    total_count = len(merged_peaks)
-
-    if verbose:
-        print(f"\n合并后总峰数: {total_count}")
-        for p in merged_peaks:
-            print(f"  depth={p['depth']:.0f}, frequency={p['freq']:.0f}, source={p['source']}")
-
-    if total_count == 3:
-        sorted_peaks = sorted(merged_peaks, key=lambda x: x['depth'])
-        d1, d2, d3 = sorted_peaks[0]['depth'], sorted_peaks[1]['depth'], sorted_peaks[2]['depth']
-        f1, f2, f3 = sorted_peaks[0]['freq'], sorted_peaks[1]['freq'], sorted_peaks[2]['freq']
-        # 判断是否符合杂合二倍体模式：depth3 ≈ 2*depth1（纯合峰），且频率合理
-        depth_ratio_ok = abs(d3 / d1 - 2) / 2 <= tolerance if d1 > 0 else False
-        freq_ratio_ok = f3 >= f2 * 0.7
-        if depth_ratio_ok and freq_ratio_ok:
-            pattern = 'diploid_hetero'
-            is_normal = True
-            detail = f"3个峰，depth=[{d1:.0f},{d2:.0f},{d3:.0f}]，第3峰depth≈2*第1峰且频率({f3:.0f})>=第2峰*0.7，判定为杂合二倍体"
-        else:
-            depths = [d1, d2]
-            pattern, is_normal, detail = classify_peaks(np.array(depths), tolerance)
-            detail += f"（第3峰不符合杂合二倍体模式，忽略）"
-    else:
-        depths = [p['depth'] for p in merged_peaks]
-        pattern, is_normal, detail = classify_peaks(depths, tolerance)
-
-    print(f"\n判定结果: {pattern}")
-    print(f"是否正常: {'是' if is_normal else '否'}")
-    print(f"详情: {detail}")
+        print(f"\n判定结果: {pattern}")
+        print(f"是否正常: 是")
+        print(f"详情: {detail}")
 
     return {
         'spe_peaks': {'depths': list(peak_depths_spe), 'freqs': list(peak_freqs_spe)},
         'num_peaks': {'depths': list(peak_depths_num), 'freqs': list(peak_freqs_num)},
-        'merged_peaks': merged_peaks,
-        'total_peak_count': total_count,
+        'merged_peaks': [],
+        'total_peak_count': 0,
         'pattern': pattern,
         'is_normal': is_normal,
         'detail': detail,
@@ -465,7 +434,7 @@ if __name__ == '__main__':
         #    左侧鞍部干掉 base_path = '/data/work/zhurui/survey_rec/data/shenshaoqi_data/survey1/X101SC2511/X101SC25114474-Z02-J002/FDSW250056744-1r_1/1.17merFreq'
 
 
-    base_path = '/data/work/zhurui/survey_rec/data/shenshaoqi_data/survey1/X101SC2505/X101SC25052754-Z01-J003/FDSW250015640-1r_Z260/Z260.17merFreq'
+    base_path = '/data/work/zhurui/survey_rec/data/shenshaoqi_data/survey1/X101SC2512/X101SC251210428-Z01-J001/FDSW250054756-3r_DH.HC/DH.HC.17merFreq'
     main_dual(
         spe_filepath=f'{base_path}.SpeFreq.cut',
         num_filepath=f'{base_path}.NumFreq.cut'
