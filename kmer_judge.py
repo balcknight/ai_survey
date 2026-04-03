@@ -288,7 +288,7 @@ def main_dual(
     merge_low_depth_threshold=30,
     low_depth_ratio=0.25,
     low_peak_freq_ratio=0.6,
-    spe_left_min_threshold=0.7,
+    spe_left_min_threshold=0.75,
     num_left_min_threshold=0.6,
     shoulder_min_freq_ratio=0.25,
     verbose=True,
@@ -380,6 +380,41 @@ def main_dual(
             'detail': f"{'/'.join(abnormal_source)} 主峰左侧最低点过高，峰型异常",
         }
 
+    # 顺序检测：两个峰时，如果主峰在前且比例为1:2，判为四倍体
+    def check_order_tetraploid(depths, freqs, tolerance):
+        if len(depths) == 2:
+            # 找到频率最高的峰的索引
+            max_freq_idx = np.argmax(freqs)
+            # 如果主峰在前（索引0），检查比例是否为1:2
+            if max_freq_idx == 0:
+                ratio = depths[1] / depths[0]
+                if abs(ratio - 2.0) <= tolerance * 2.0:
+                    return True, f"2个峰，主峰在前，depth=[{depths[0]:.0f}, {depths[1]:.0f}]，比值≈1:2，判定为四倍体"
+        return False, None
+
+    spe_is_order_tetra, spe_order_detail = check_order_tetraploid(peak_depths_spe_f, peak_freqs_spe_f, tolerance)
+    num_is_order_tetra, num_order_detail = check_order_tetraploid(peak_depths_num_f, peak_freqs_num_f, tolerance)
+
+    # 如果两者都符合顺序四倍体，直接返回正常
+    if spe_is_order_tetra and num_is_order_tetra:
+        pattern = 'tetraploid'
+        is_normal = True
+        detail = f"SpeFreq与NumFreq均符合顺序四倍体。SpeFreq: {spe_order_detail}; NumFreq: {num_order_detail}"
+        if verbose:
+            print(f"\n顺序检测: 两者均为四倍体")
+            print(f"判定结果: {pattern}")
+            print(f"是否正常: 是")
+            print(f"详情: {detail}")
+        return {
+            'spe_peaks': {'depths': list(peak_depths_spe), 'freqs': list(peak_freqs_spe)},
+            'num_peaks': {'depths': list(peak_depths_num), 'freqs': list(peak_freqs_num)},
+            'merged_peaks': [],
+            'total_peak_count': 0,
+            'pattern': pattern,
+            'is_normal': is_normal,
+            'detail': detail,
+        }
+
     # 分别对 spe 和 num 单独判定
     spe_pattern, spe_is_normal, spe_detail = classify_peaks(list(peak_depths_spe_f), tolerance)
     num_pattern, num_is_normal, num_detail = classify_peaks(list(peak_depths_num_f), tolerance)
@@ -434,7 +469,7 @@ if __name__ == '__main__':
         #    左侧鞍部干掉 base_path = '/data/work/zhurui/survey_rec/data/shenshaoqi_data/survey1/X101SC2511/X101SC25114474-Z02-J002/FDSW250056744-1r_1/1.17merFreq'
 
 
-    base_path = '/data/work/zhurui/survey_rec/data/shenshaoqi_data/survey1/X101SC2512/X101SC251210428-Z01-J001/FDSW250054756-3r_DH.HC/DH.HC.17merFreq'
+    base_path = '/data/work/zhurui/survey_rec/data/shenshaoqi_data/survey1/X101SC2509/X101SC25095703-Z02-J001/FDSW250256248-1r_140/140.17merFreq'
     main_dual(
         spe_filepath=f'{base_path}.SpeFreq.cut',
         num_filepath=f'{base_path}.NumFreq.cut'
