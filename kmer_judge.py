@@ -141,7 +141,7 @@ def _match_ratios(actual_ratios, expected_ratios, tolerance):
 
 
 def filter_low_depth_peak(peak_depths, peak_freqs, tolerance=0.10,
-                          low_depth_ratio=0.3, low_peak_freq_ratio=0.6):
+                          low_depth_ratio=0.2, low_peak_freq_ratio=0.6):
     """
     过滤低深度污染峰。阈值为主峰深度的low_depth_ratio（默认20%）。
     条件：第一个峰和第二个峰不成1:2比例，且第一个峰深度<阈值，且第一个峰高度<最高峰*比例。
@@ -202,12 +202,16 @@ def classify_peaks(peak_depths, tolerance=0.10):
         ('tetraploid',        [1, 2, 3, 4], '四倍体'),
     ]
 
-    # 新逻辑：n>=2 时先检查 1:2，若不符合则检查1:4（疑似多倍体），否则直接停止
+    # 新逻辑：n>=2 时先检查 1:2，若不符合则检查1:3和1:4（扩展范围），否则直接停止
     if not _match_ratios(ratios[:2], [1, 2], tolerance):
-        # 检查是否为1:4（疑似多倍体）
-        if n == 2 and _match_ratios(ratios[:2], [1, 4], tolerance):
+        # 检查是否为1:3（2.7-3.3范围）
+        if n == 2 and 2.7 <= ratios[1] <= 3.3:
             depths_str = ', '.join(f'{d:.0f}' for d in peak_depths)
-            return 'suspected_polyploid', False, f'2个峰，depth=[{depths_str}]，比值≈1:4，疑似多倍体'
+            return 'triploid', True, f'2个峰，depth=[{depths_str}]，比值≈1:3，三倍体'
+        # 检查是否为1:4（3.5-4.2范围）
+        if n == 2 and 3.5 <= ratios[1] <= 4.2:
+            depths_str = ', '.join(f'{d:.0f}' for d in peak_depths)
+            return 'tetraploid', True, f'2个峰，depth=[{depths_str}]，比值≈1:4，四倍体'
         ratio_str = ':'.join(f'{r:.2f}' for r in ratios)
         depths_str = ', '.join(f'{d:.0f}' for d in peak_depths)
         return 'unknown', False, f'{n}个峰，depth=[{depths_str}]，比值={ratio_str}，不符合1:2，停止判定'
@@ -286,11 +290,12 @@ def main_dual(
     merge_tolerance=0.17,
     merge_low_depth_abs=7,
     merge_low_depth_threshold=30,
-    low_depth_ratio=0.25,
+    low_depth_ratio=0.2,
     low_peak_freq_ratio=0.6,
     spe_left_min_threshold=0.75,
     num_left_min_threshold=0.6,
     shoulder_min_freq_ratio=0.25,
+    all_peaks_too_low_ratio=0.15,
     verbose=True,
 ):
     df_spe = load_data(spe_filepath, depth_min, depth_max)
@@ -337,6 +342,47 @@ def main_dual(
         print(f"\n单独过滤低深度峰后:")
         print(f"  SpeFreq: {len(peak_depths_spe_f)} 个峰 {list(peak_depths_spe_f)}")
         print(f"  NumFreq: {len(peak_depths_num_f)} 个峰 {list(peak_depths_num_f)}")
+
+    # 检测所有峰太低：最高峰频率低于全局最高值的指定比例（默认10%）
+    # 全局最高值从 depth >= 10 开始计算，排除极低深度的错误 k-mer 噪声峰
+    global_max_freq_spe = df_spe[df_spe['Depth'] >= 10]['Frequency'].max()
+    global_max_freq_num = df_num[df_num['Depth'] >= 10]['Frequency'].max()
+
+    if len(peak_freqs_spe_f) > 0:
+        max_peak_freq_spe = peak_freqs_spe_f.max()
+        if max_peak_freq_spe < global_max_freq_spe * all_peaks_too_low_ratio:
+            detail = f"SpeFreq 最高峰频率({max_peak_freq_spe:.0f})低于全局最高值({global_max_freq_spe:.0f})的{all_peaks_too_low_ratio*100:.0f}%，所有峰太低"
+            if verbose:
+                print(f"\n判定结果: all_peaks_too_low")
+                print(f"是否正常: 否")
+                print(f"详情: {detail}")
+            return {
+                'spe_peaks': {'depths': list(peak_depths_spe), 'freqs': list(peak_freqs_spe)},
+                'num_peaks': {'depths': list(peak_depths_num), 'freqs': list(peak_freqs_num)},
+                'merged_peaks': [],
+                'total_peak_count': 0,
+                'pattern': 'all_peaks_too_low',
+                'is_normal': False,
+                'detail': detail,
+            }
+
+    if len(peak_freqs_num_f) > 0:
+        max_peak_freq_num = peak_freqs_num_f.max()
+        if max_peak_freq_num < global_max_freq_num * all_peaks_too_low_ratio:
+            detail = f"NumFreq 最高峰频率({max_peak_freq_num:.0f})低于全局最高值({global_max_freq_num:.0f})的{all_peaks_too_low_ratio*100:.0f}%，所有峰太低"
+            if verbose:
+                print(f"\n判定结果: all_peaks_too_low")
+                print(f"是否正常: 否")
+                print(f"详情: {detail}")
+            return {
+                'spe_peaks': {'depths': list(peak_depths_spe), 'freqs': list(peak_freqs_spe)},
+                'num_peaks': {'depths': list(peak_depths_num), 'freqs': list(peak_freqs_num)},
+                'merged_peaks': [],
+                'total_peak_count': 0,
+                'pattern': 'all_peaks_too_low',
+                'is_normal': False,
+                'detail': detail,
+            }
 
     # 如果 spe 或 num 检测到 0 个峰，直接判为异常
     if len(peak_depths_spe) == 0 or len(peak_depths_num) == 0:
@@ -469,7 +515,7 @@ if __name__ == '__main__':
         #    左侧鞍部干掉 base_path = '/data/work/zhurui/survey_rec/data/shenshaoqi_data/survey1/X101SC2511/X101SC25114474-Z02-J002/FDSW250056744-1r_1/1.17merFreq'
 
 
-    base_path = '/data/work/zhurui/survey_rec/data/shenshaoqi_data/survey1/X101SC2509/X101SC25095703-Z02-J001/FDSW250256248-1r_140/140.17merFreq'
+    base_path = '/data/work/zhurui/survey_rec/data/shenshaoqi_data/survey1/X101SC2506/X101SC25068140-Z02-J001/FDSW250391003-1r_Sf-1/Sf-1.17merFreq'
     main_dual(
         spe_filepath=f'{base_path}.SpeFreq.cut',
         num_filepath=f'{base_path}.NumFreq.cut'
