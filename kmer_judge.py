@@ -16,11 +16,15 @@ def load_data(filepath, depth_min=3, depth_max=300):
 def detect_peaks(df, smooth_window=11, smooth_poly=3,
                  prominence_ratio=0.04, min_distance=10, min_width=15,
                  left_min_threshold=0.33, detect_shoulder=True,
-                 shoulder_min_freq_ratio=0.3, shoulder_min_d1_ratio=0.30):
+                 shoulder_min_freq_ratio=0.3, shoulder_min_d1_ratio=0.30,
+                 use_smoothing=True):
     freq = df['Frequency'].values.astype(float)
     depth = df['Depth'].values
 
-    freq_smooth = savgol_filter(freq, window_length=smooth_window, polyorder=smooth_poly)
+    if use_smoothing:
+        freq_smooth = savgol_filter(freq, window_length=smooth_window, polyorder=smooth_poly)
+    else:
+        freq_smooth = freq.copy()
 
     # 宽松条件找候选峰，再按 prominence 相对最高峰的比例过滤
     peaks_idx, properties = find_peaks(freq_smooth, distance=min_distance, prominence=0, width=0)
@@ -56,7 +60,10 @@ def detect_peaks(df, smooth_window=11, smooth_poly=3,
     # 肩峰检测：在上升段找一阶导数的局部极小值（增长减缓处）
     if detect_shoulder and len(freq_smooth) > smooth_window:
         d1 = np.gradient(freq_smooth)
-        d1_smooth = savgol_filter(d1, window_length=smooth_window, polyorder=smooth_poly)
+        if use_smoothing:
+            d1_smooth = savgol_filter(d1, window_length=smooth_window, polyorder=smooth_poly)
+        else:
+            d1_smooth = d1
 
         # 一阶导数的局部极小值 = 增长速率最慢的位置
         neg_d1 = -d1_smooth
@@ -296,18 +303,21 @@ def main_dual(
     num_left_min_threshold=0.6,
     shoulder_min_freq_ratio=0.25,
     all_peaks_too_low_ratio=0.15,
+    use_smoothing=True,
     verbose=True,
 ):
     df_spe = load_data(spe_filepath, depth_min, depth_max)
     peak_depths_spe, peak_freqs_spe, abnormal_flags_spe, is_abnormal_spe = detect_peaks(
         df_spe, smooth_window, smooth_poly, prominence_ratio, min_distance, min_width, spe_left_min_threshold,
-        shoulder_min_freq_ratio=shoulder_min_freq_ratio
+        shoulder_min_freq_ratio=shoulder_min_freq_ratio,
+        use_smoothing=use_smoothing
     )
 
     df_num = load_data(num_filepath, depth_min, depth_max)
     peak_depths_num, peak_freqs_num, abnormal_flags_num, is_abnormal_num = detect_peaks(
         df_num, smooth_window, smooth_poly, prominence_ratio, min_distance, min_width, num_left_min_threshold,
-        shoulder_min_freq_ratio=shoulder_min_freq_ratio
+        shoulder_min_freq_ratio=shoulder_min_freq_ratio,
+        use_smoothing=use_smoothing
     )
 
     if verbose:
@@ -515,8 +525,9 @@ if __name__ == '__main__':
         #    左侧鞍部干掉 base_path = '/data/work/zhurui/survey_rec/data/shenshaoqi_data/survey1/X101SC2511/X101SC25114474-Z02-J002/FDSW250056744-1r_1/1.17merFreq'
 
 
-    base_path = '/data/work/zhurui/survey_rec/data/shenshaoqi_data/survey1/X101SC2506/X101SC25068140-Z02-J001/FDSW250391003-1r_Sf-1/Sf-1.17merFreq'
+    base_path = 'data/shenshaoqi_data/survey1/X101SC2507/X101SC25078828-Z04-J001/FDSW250022183-2r_TL/TL.17merFreq'
     main_dual(
         spe_filepath=f'{base_path}.SpeFreq.cut',
-        num_filepath=f'{base_path}.NumFreq.cut'
+        num_filepath=f'{base_path}.NumFreq.cut',
+        use_smoothing=False
     )
