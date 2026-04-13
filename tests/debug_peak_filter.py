@@ -6,7 +6,7 @@
     python tests/debug_peak_filter.py <SpeFreq.cut 或 NumFreq.cut 文件路径> [depth_min] [depth_max]
 
 示例:
-    python tests/debug_peak_filter.py /data/work/zhurui/survey_rec/data/shenshaoqi_data/survey1/X101SC2505/X101SC25052754-Z01-J003/FDSW250015639-1r_Z119/Z119.17merFreq.SpeFreq.cut
+    python tests/debug_peak_filter.py data/shenshaoqi_data/survey1/X101SC2511/X101SC25114474-Z02-J002/FDSW250056744-1r_1/1.17merFreq.NumFreq.cut
     python tests/debug_peak_filter.py /path/to/YB.17merFreq.SpeFreq.cut 3 300
 """
 import sys
@@ -17,7 +17,7 @@ from scipy.signal import find_peaks, savgol_filter
 
 def debug_peak_filter(filepath, depth_min=3, depth_max=300,
                       smooth_window=11, smooth_poly=3,
-                      prominence_ratio=0.04, min_distance=10,
+                      prominence_ratio=0.009, min_distance=10,
                       min_width=15):
     # 加载数据
     df = pd.read_csv(filepath, sep=r'\s+', header=None, names=['Depth', 'Frequency'])

@@ -1,6 +1,6 @@
 import pandas as pd
 import numpy as np
-from scipy.signal import find_peaks, savgol_filter
+from scipy.signal import find_peaks, peak_widths, savgol_filter
 
 PATTERN_CN = {
     'no_peak': '未检测到峰',
@@ -36,7 +36,7 @@ def detect_peaks(df, smooth_window=11, smooth_poly=3,
                  prominence_ratio=0.04, min_distance=10, min_width=15,
                  left_min_threshold=0.33, detect_shoulder=True,
                  shoulder_min_freq_ratio=0.3, shoulder_min_d1_ratio=0.30,
-                 use_smoothing=True):
+                 use_smoothing=True, min_width_shoulder=6):
     freq = df['Frequency'].values.astype(float)
     depth = df['Depth'].values
 
@@ -57,24 +57,12 @@ def detect_peaks(df, smooth_window=11, smooth_poly=3,
                (freq_smooth[peaks_idx] >= max_peak_freq * prominence_ratio)
         peaks_idx = peaks_idx[mask]
 
-    # 计算峰宽度并过滤（从峰顶向两侧查找局部最小值）
-    valid_peaks = []
-    for idx in peaks_idx:
-        # 左侧：从峰顶向左移动，直到频率不再递减（达到局部谷底）
-        left = idx
-        while left > 0 and freq_smooth[left - 1] < freq_smooth[left]:
-            left -= 1
-
-        # 右侧：从峰顶向右移动，直到频率不再递减（达到局部谷底）
-        right = idx
-        while right < len(freq_smooth) - 1 and freq_smooth[right + 1] < freq_smooth[right]:
-            right += 1
-
-        width = right - left
-        if width >= min_width:
-            valid_peaks.append(idx)
-
-    peaks_idx = np.array(valid_peaks, dtype=int)
+    # 使用半高宽过滤窄峰：边界伪峰通常半高宽极小，真实主峰半高宽明显更大
+    if len(peaks_idx) > 0:
+        widths, _, _, _ = peak_widths(freq_smooth, peaks_idx, rel_height=0.5)
+        peaks_idx = peaks_idx[widths >= min_width]
+    else:
+        peaks_idx = np.array([], dtype=int)
 
     # 肩峰检测：在上升段找一阶导数的局部极小值（增长减缓处）
     if detect_shoulder and len(freq_smooth) > smooth_window:
@@ -106,6 +94,10 @@ def detect_peaks(df, smooth_window=11, smooth_poly=3,
             # 条件3：不与已有的普通峰太近
             if len(peaks_idx) > 0 and np.min(np.abs(peaks_idx - s_idx)) < min_distance:
                 continue
+            # 条件4：肩峰半高宽过滤（比普通峰更宽松）
+            s_width, _, _, _ = peak_widths(freq_smooth, [s_idx], rel_height=0.5)
+            if s_width[0] < min_width_shoulder:
+                continue
             # 加入峰列表
             peaks_idx = np.append(peaks_idx, s_idx)
 
@@ -122,7 +114,11 @@ def detect_peaks(df, smooth_window=11, smooth_poly=3,
                 # 条件2：不与已有峰太近
                 if len(peaks_idx) > 0 and np.min(np.abs(peaks_idx - plat_idx)) < min_distance:
                     continue
-                # 条件3：零交叉后频率需要先下降再回升（排除单调上升中的噪声抖动）
+                # 条件3：肩峰半高宽过滤（比普通峰更宽松）
+                p_width, _, _, _ = peak_widths(freq_smooth, [plat_idx], rel_height=0.5)
+                if p_width[0] < min_width_shoulder:
+                    continue
+                # 条件4：零交叉后频率需要先下降再回升（排除单调上升中的噪声抖动）
                 # 检查右侧是否存在一个局部最低点，且之后频率回升
                 right_region = freq_smooth[plat_idx:min(plat_idx + min_distance * 2, len(freq_smooth))]
                 if len(right_region) > 2:
@@ -311,7 +307,8 @@ def main_dual(
     smooth_poly=3,
     prominence_ratio=0.009,
     min_distance=10,
-    min_width=10,
+    min_width=8,
+    min_width_shoulder=4,
     tolerance=0.16,
     merge_tolerance=0.17,
     merge_low_depth_abs=7,
@@ -322,21 +319,23 @@ def main_dual(
     num_left_min_threshold=0.6,
     shoulder_min_freq_ratio=0.25,
     all_peaks_too_low_ratio=0.15,
-    use_smoothing=False,
+    use_smoothing=True,
     verbose=True,
 ):
     df_spe = load_data(spe_filepath, depth_min, depth_max)
     peak_depths_spe, peak_freqs_spe, abnormal_flags_spe, is_abnormal_spe = detect_peaks(
         df_spe, smooth_window, smooth_poly, prominence_ratio, min_distance, min_width, spe_left_min_threshold,
         shoulder_min_freq_ratio=shoulder_min_freq_ratio,
-        use_smoothing=use_smoothing
+        use_smoothing=use_smoothing,
+        min_width_shoulder=min_width_shoulder
     )
 
     df_num = load_data(num_filepath, depth_min, depth_max)
     peak_depths_num, peak_freqs_num, abnormal_flags_num, is_abnormal_num = detect_peaks(
         df_num, smooth_window, smooth_poly, prominence_ratio, min_distance, min_width, num_left_min_threshold,
         shoulder_min_freq_ratio=shoulder_min_freq_ratio,
-        use_smoothing=use_smoothing
+        use_smoothing=use_smoothing,
+        min_width_shoulder=min_width_shoulder
     )
 
     if verbose:
@@ -547,9 +546,9 @@ if __name__ == '__main__':
         #    左侧鞍部干掉 base_path = '/data/work/zhurui/survey_rec/data/shenshaoqi_data/survey1/X101SC2511/X101SC25114474-Z02-J002/FDSW250056744-1r_1/1.17merFreq'
 
 
-    base_path = 'data/shenshaoqi_data/survey1/X101SC2504/X101SC25045278-Z02-J002/FDES250029975-1r_TTHF/TTHF.17merFreq'
+    base_path = 'data/shenshaoqi_data/survey1/X101SC2511/X101SC25114474-Z02-J002/FDSW250056744-1r_1/1.17merFreq'
     main_dual(
         spe_filepath=f'{base_path}.SpeFreq.cut',
         num_filepath=f'{base_path}.NumFreq.cut',
-        use_smoothing=False
+        use_smoothing=True
     )

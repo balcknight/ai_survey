@@ -141,8 +141,10 @@ def run_all(max_samples=None, verbose=False, output_path=None):
     wb.save(output_path)
 
     normal_count = sum(1 for i in range(total) if df.at[i, 'kmer是否正常'] == '正常')
+    match_count = sum(1 for i in range(total) if df.at[i, '是否一致'] == '是')
     print('\n' + '=' * 60)
     print(f'处理完成: {total} 个样本，正常 {normal_count} 个，异常 {total - normal_count} 个')
+    print(f'一致 {match_count} 个，不一致 {total - match_count} 个')
     print(f'结果已写入: {output_path}')
 
     return df
