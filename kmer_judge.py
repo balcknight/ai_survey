@@ -2,6 +2,25 @@ import pandas as pd
 import numpy as np
 from scipy.signal import find_peaks, savgol_filter
 
+PATTERN_CN = {
+    'no_peak': '未检测到峰',
+    'diploid_homo': '纯合二倍体',
+    'diploid_hetero': '杂合二倍体',
+    'triploid': '三倍体',
+    'high_repetitive_diplo': '高重复二倍体',
+    'tetraploid': '四倍体',
+    'unknown': '未知倍型',
+    'all_peaks_too_low': '所有峰过低',
+    'no_peak_detected': '未检测到峰',
+    'peak_shape_abnormal': '峰型异常',
+}
+
+
+def to_pattern_cn(pattern):
+    if '+' in pattern:
+        return '+'.join(PATTERN_CN.get(p, p) for p in pattern.split('+'))
+    return PATTERN_CN.get(pattern, pattern)
+
 
 def load_data(filepath, depth_min=3, depth_max=300):
     df = pd.read_csv(filepath, sep=r'\s+', header=None, names=['Depth', 'Frequency'])
@@ -303,7 +322,7 @@ def main_dual(
     num_left_min_threshold=0.6,
     shoulder_min_freq_ratio=0.25,
     all_peaks_too_low_ratio=0.15,
-    use_smoothing=True,
+    use_smoothing=False,
     verbose=True,
 ):
     df_spe = load_data(spe_filepath, depth_min, depth_max)
@@ -363,7 +382,7 @@ def main_dual(
         if max_peak_freq_spe < global_max_freq_spe * all_peaks_too_low_ratio:
             detail = f"SpeFreq 最高峰频率({max_peak_freq_spe:.0f})低于全局最高值({global_max_freq_spe:.0f})的{all_peaks_too_low_ratio*100:.0f}%，所有峰太低"
             if verbose:
-                print(f"\n判定结果: all_peaks_too_low")
+                print(f"\n判定结果: {to_pattern_cn('all_peaks_too_low')}")
                 print(f"是否正常: 否")
                 print(f"详情: {detail}")
             return {
@@ -371,7 +390,7 @@ def main_dual(
                 'num_peaks': {'depths': list(peak_depths_num), 'freqs': list(peak_freqs_num)},
                 'merged_peaks': [],
                 'total_peak_count': 0,
-                'pattern': 'all_peaks_too_low',
+                'pattern': to_pattern_cn('all_peaks_too_low'),
                 'is_normal': False,
                 'detail': detail,
             }
@@ -381,7 +400,7 @@ def main_dual(
         if max_peak_freq_num < global_max_freq_num * all_peaks_too_low_ratio:
             detail = f"NumFreq 最高峰频率({max_peak_freq_num:.0f})低于全局最高值({global_max_freq_num:.0f})的{all_peaks_too_low_ratio*100:.0f}%，所有峰太低"
             if verbose:
-                print(f"\n判定结果: all_peaks_too_low")
+                print(f"\n判定结果: {to_pattern_cn('all_peaks_too_low')}")
                 print(f"是否正常: 否")
                 print(f"详情: {detail}")
             return {
@@ -389,7 +408,7 @@ def main_dual(
                 'num_peaks': {'depths': list(peak_depths_num), 'freqs': list(peak_freqs_num)},
                 'merged_peaks': [],
                 'total_peak_count': 0,
-                'pattern': 'all_peaks_too_low',
+                'pattern': to_pattern_cn('all_peaks_too_low'),
                 'is_normal': False,
                 'detail': detail,
             }
@@ -403,7 +422,7 @@ def main_dual(
             zero_source.append('NumFreq')
         detail = f"{'/'.join(zero_source)} 未检测到任何峰，数据异常"
         if verbose:
-            print(f"\n判定结果: no_peak_detected")
+            print(f"\n判定结果: {to_pattern_cn('no_peak_detected')}")
             print(f"是否正常: 否")
             print(f"详情: {detail}")
         return {
@@ -411,7 +430,7 @@ def main_dual(
             'num_peaks': {'depths': list(peak_depths_num), 'freqs': list(peak_freqs_num)},
             'merged_peaks': [],
             'total_peak_count': 0,
-            'pattern': 'no_peak_detected',
+            'pattern': to_pattern_cn('no_peak_detected'),
             'is_normal': False,
             'detail': detail,
         }
@@ -423,7 +442,7 @@ def main_dual(
             abnormal_source.append('SpeFreq')
         if is_abnormal_num:
             abnormal_source.append('NumFreq')
-        print(f"\n判定结果: peak_shape_abnormal")
+        print(f"\n判定结果: {to_pattern_cn('peak_shape_abnormal')}")
         print(f"是否正常: 否")
         print(f"详情: {'/'.join(abnormal_source)} 主峰左侧最低点过高，峰型异常")
         return {
@@ -431,7 +450,7 @@ def main_dual(
             'num_peaks': {'depths': list(peak_depths_num), 'freqs': list(peak_freqs_num)},
             'merged_peaks': [],
             'total_peak_count': 0,
-            'pattern': 'peak_shape_abnormal',
+            'pattern': to_pattern_cn('peak_shape_abnormal'),
             'is_normal': False,
             'detail': f"{'/'.join(abnormal_source)} 主峰左侧最低点过高，峰型异常",
         }
@@ -454,11 +473,12 @@ def main_dual(
     # 如果两者都符合顺序四倍体，直接返回正常
     if spe_is_order_tetra and num_is_order_tetra:
         pattern = 'tetraploid'
+        pattern_cn = to_pattern_cn(pattern)
         is_normal = True
         detail = f"SpeFreq与NumFreq均符合顺序四倍体。SpeFreq: {spe_order_detail}; NumFreq: {num_order_detail}"
         if verbose:
             print(f"\n顺序检测: 两者均为四倍体")
-            print(f"判定结果: {pattern}")
+            print(f"判定结果: {pattern_cn}")
             print(f"是否正常: 是")
             print(f"详情: {detail}")
         return {
@@ -466,7 +486,7 @@ def main_dual(
             'num_peaks': {'depths': list(peak_depths_num), 'freqs': list(peak_freqs_num)},
             'merged_peaks': [],
             'total_peak_count': 0,
-            'pattern': pattern,
+            'pattern': pattern_cn,
             'is_normal': is_normal,
             'detail': detail,
         }
@@ -477,16 +497,17 @@ def main_dual(
 
     if verbose:
         print(f"\n单独判定:")
-        print(f"  SpeFreq: {spe_pattern}, 正常={spe_is_normal}, {spe_detail}")
-        print(f"  NumFreq: {num_pattern}, 正常={num_is_normal}, {num_detail}")
+        print(f"  SpeFreq: {to_pattern_cn(spe_pattern)}, 正常={spe_is_normal}, {spe_detail}")
+        print(f"  NumFreq: {to_pattern_cn(num_pattern)}, 正常={num_is_normal}, {num_detail}")
 
     # 新逻辑：只要有一个不合格就判定为不合格
     if not spe_is_normal or not num_is_normal:
         pattern = f"{spe_pattern}+{num_pattern}"
+        pattern_cn = to_pattern_cn(pattern)
         is_normal = False
         detail = f"SpeFreq或NumFreq有不合格项。SpeFreq: {spe_detail}; NumFreq: {num_detail}"
         if verbose:
-            print(f"\n判定结果: {pattern}")
+            print(f"\n判定结果: {pattern_cn}")
             print(f"是否正常: 否")
             print(f"详情: {detail}")
         return {
@@ -494,17 +515,18 @@ def main_dual(
             'num_peaks': {'depths': list(peak_depths_num), 'freqs': list(peak_freqs_num)},
             'merged_peaks': [],
             'total_peak_count': 0,
-            'pattern': pattern,
+            'pattern': pattern_cn,
             'is_normal': is_normal,
             'detail': detail,
         }
 
     # 两个都合格，返回正常
     pattern = spe_pattern
+    pattern_cn = to_pattern_cn(pattern)
     is_normal = True
     detail = f"SpeFreq与NumFreq均合格。SpeFreq: {spe_detail}; NumFreq: {num_detail}"
     if verbose:
-        print(f"\n判定结果: {pattern}")
+        print(f"\n判定结果: {pattern_cn}")
         print(f"是否正常: 是")
         print(f"详情: {detail}")
 
@@ -513,7 +535,7 @@ def main_dual(
         'num_peaks': {'depths': list(peak_depths_num), 'freqs': list(peak_freqs_num)},
         'merged_peaks': [],
         'total_peak_count': 0,
-        'pattern': pattern,
+        'pattern': pattern_cn,
         'is_normal': is_normal,
         'detail': detail,
     }
@@ -525,7 +547,7 @@ if __name__ == '__main__':
         #    左侧鞍部干掉 base_path = '/data/work/zhurui/survey_rec/data/shenshaoqi_data/survey1/X101SC2511/X101SC25114474-Z02-J002/FDSW250056744-1r_1/1.17merFreq'
 
 
-    base_path = 'data/shenshaoqi_data/survey1/X101SC2507/X101SC25078828-Z04-J001/FDSW250022183-2r_TL/TL.17merFreq'
+    base_path = 'data/shenshaoqi_data/survey1/X101SC2504/X101SC25045278-Z02-J002/FDES250029975-1r_TTHF/TTHF.17merFreq'
     main_dual(
         spe_filepath=f'{base_path}.SpeFreq.cut',
         num_filepath=f'{base_path}.NumFreq.cut',
