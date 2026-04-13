@@ -6,19 +6,19 @@
     python tests/debug_peak_filter.py <SpeFreq.cut 或 NumFreq.cut 文件路径> [depth_min] [depth_max]
 
 示例:
-    python tests/debug_peak_filter.py data/shenshaoqi_data/survey1/X101SC2511/X101SC25114474-Z02-J002/FDSW250056744-1r_1/1.17merFreq.NumFreq.cut
+    python tests/debug_peak_filter.py /data/work/zhurui/survey_rec/data/shenshaoqi_data/survey1/X101SC2504/X101SC25045278-Z02-J002/FDES250029975-1r_TTHF/TTHF.17merFreq.NumFreq.cut
     python tests/debug_peak_filter.py /path/to/YB.17merFreq.SpeFreq.cut 3 300
 """
 import sys
 import pandas as pd
 import numpy as np
-from scipy.signal import find_peaks, savgol_filter
+from scipy.signal import find_peaks, peak_widths, savgol_filter
 
 
 def debug_peak_filter(filepath, depth_min=3, depth_max=300,
                       smooth_window=11, smooth_poly=3,
                       prominence_ratio=0.009, min_distance=10,
-                      min_width=15):
+                      min_width=8):
     # 加载数据
     df = pd.read_csv(filepath, sep=r'\s+', header=None, names=['Depth', 'Frequency'])
     df['Depth'] = pd.to_numeric(df['Depth'], errors='coerce')
@@ -67,20 +67,23 @@ def debug_peak_filter(filepath, depth_min=3, depth_max=300,
     else:
         peaks_after_prom = peaks_idx
 
-    # 第三步：宽度过滤
+    # 第三步：宽度过滤（与主程序一致：半高宽 rel_height=0.5）
     print(f"\n=== 第三步: 宽度过滤 (min_width={min_width}) ===")
     valid_peaks = []
-    for idx in peaks_after_prom:
-        left = idx
-        while left > 0 and freq_smooth[left - 1] < freq_smooth[left]:
-            left -= 1
-        right = idx
-        while right < len(freq_smooth) - 1 and freq_smooth[right + 1] < freq_smooth[right]:
-            right += 1
-        width = right - left
+    if len(peaks_after_prom) > 0:
+        widths, _, left_ips, right_ips = peak_widths(freq_smooth, peaks_after_prom, rel_height=0.5)
+    else:
+        widths = np.array([])
+        left_ips = np.array([])
+        right_ips = np.array([])
+
+    for i, idx in enumerate(peaks_after_prom):
+        width = widths[i]
+        left_depth = depth[int(np.floor(left_ips[i]))]
+        right_depth = depth[int(np.ceil(right_ips[i]))]
         status = 'PASS' if width >= min_width else 'FAIL'
-        print(f"  depth={depth[idx]}, left=depth {depth[left]}, right=depth {depth[right]}, "
-              f"width={width} -> {status}")
+        print(f"  depth={depth[idx]}, left~depth {left_depth}, right~depth {right_depth}, "
+              f"half_width={width:.2f} -> {status}")
         if width >= min_width:
             valid_peaks.append(idx)
 
