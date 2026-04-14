@@ -4,10 +4,11 @@ from scipy.signal import find_peaks, peak_widths, savgol_filter
 
 PATTERN_CN = {
     'no_peak': '未检测到峰',
-    'diploid_homo': '纯合二倍体',
-    'diploid_hetero': '杂合二倍体',
+    'diploid': '二倍体',
+    'diploid_homo': '二倍体',
+    'diploid_hetero': '二倍体',
     'triploid': '三倍体',
-    'high_repetitive_diplo': '高重复二倍体',
+    'high_repetitive_diplo': '二倍体',
     'tetraploid': '四倍体',
     'unknown': '未知倍型',
     'all_peaks_too_low': '所有峰过低',
@@ -20,6 +21,13 @@ def to_pattern_cn(pattern):
     if '+' in pattern:
         return '+'.join(PATTERN_CN.get(p, p) for p in pattern.split('+'))
     return PATTERN_CN.get(pattern, pattern)
+
+
+def normalize_ploidy_pattern(pattern):
+    diploid_patterns = {'diploid', 'diploid_homo', 'diploid_hetero', 'high_repetitive_diplo'}
+    if pattern in diploid_patterns:
+        return 'diploid'
+    return pattern
 
 
 def load_data(filepath, depth_min=3, depth_max=300):
@@ -333,15 +341,21 @@ def filter_low_depth_peak(peak_depths, peak_freqs, tolerance=0.10,
     return peak_depths, peak_freqs
 
 
-def classify_peaks(peak_depths, tolerance=0.10):
-    peak_depths = sorted(peak_depths)
+def classify_peaks(peak_depths, peak_freqs=None, tolerance=0.10):
+    if peak_freqs is None:
+        peak_freqs = np.ones(len(peak_depths), dtype=float)
+    peak_depths = np.array(peak_depths, dtype=float)
+    peak_freqs = np.array(peak_freqs, dtype=float)
+    sort_idx = np.argsort(peak_depths)
+    peak_depths = peak_depths[sort_idx]
+    peak_freqs = peak_freqs[sort_idx]
     n = len(peak_depths)
 
     if n == 0:
         return 'no_peak', False, '未检测到峰'
 
     if n == 1:
-        return 'diploid_homo', True, f'1个峰，depth={peak_depths[0]:.0f}，纯合二倍体'
+        return 'diploid_homo', True, f'1个峰，depth={peak_depths[0]:.0f}，二倍体'
 
     base = peak_depths[0]
     ratios = [d / base for d in peak_depths]
@@ -349,7 +363,6 @@ def classify_peaks(peak_depths, tolerance=0.10):
     PATTERNS = [
         ('diploid_hetero',    [1, 2],    '杂合二倍体'),
         ('triploid',          [1, 2, 3], '三倍体'),
-        ('high_repetitive_diplo', [1, 2, 4], '高重复二倍体'),
         ('tetraploid',        [1, 2, 3, 4], '四倍体'),
     ]
 
@@ -367,7 +380,37 @@ def classify_peaks(peak_depths, tolerance=0.10):
         depths_str = ', '.join(f'{d:.0f}' for d in peak_depths)
         return 'unknown', False, f'{n}个峰，depth=[{depths_str}]，比值={ratio_str}，不符合1:2，停止判定'
 
-    # 先尝试更高倍体判定，triploid/high_repetitive_diplo 同步看，然后尝试 tetraploid
+    # 1:2:3 特判：仅三峰时，第三峰频率达到主峰40%才判三倍体，否则判二倍体
+    if n == 3 and _match_ratios(ratios[:3], [1, 2, 3], tolerance):
+        main_peak_freq = float(np.max(peak_freqs))
+        third_peak_freq = float(peak_freqs[2])
+        depths_str = ', '.join(f'{d:.0f}' for d in peak_depths[:3])
+        if third_peak_freq >= main_peak_freq * 0.4:
+            return 'triploid', True, (
+                f'{n}个峰，depth=[{depths_str}]，比值≈1:2:3，'
+                f'第三峰频率({third_peak_freq:.0f})>=主峰40%({main_peak_freq * 0.4:.0f})，判为三倍体'
+            )
+        return 'diploid_hetero', True, (
+            f'{n}个峰，depth=[{depths_str}]，比值≈1:2:3，'
+            f'第三峰频率({third_peak_freq:.0f})<主峰40%({main_peak_freq * 0.4:.0f})，判为二倍体'
+        )
+
+    # 1:2:4 特判：第三峰低于主峰50%时判二倍体，否则判四倍体
+    if n >= 3 and _match_ratios(ratios[:3], [1, 2, 4], tolerance):
+        main_peak_freq = float(np.max(peak_freqs))
+        third_peak_freq = float(peak_freqs[2])
+        depths_str = ', '.join(f'{d:.0f}' for d in peak_depths[:3])
+        if third_peak_freq < main_peak_freq * 0.5:
+            return 'high_repetitive_diplo', True, (
+                f'{n}个峰，depth=[{depths_str}]，比值≈1:2:4，'
+                f'第三峰频率({third_peak_freq:.0f})<主峰50%({main_peak_freq * 0.5:.0f})，判为二倍体'
+            )
+        return 'tetraploid', True, (
+            f'{n}个峰，depth=[{depths_str}]，比值≈1:2:4，'
+            f'第三峰频率({third_peak_freq:.0f})>=主峰50%({main_peak_freq * 0.5:.0f})，判为四倍体'
+        )
+
+    # 先尝试更高倍体判定，然后尝试 tetraploid
     best_match = None
     best_len = 0
     for name, expected, desc in PATTERNS[1:]:
@@ -384,47 +427,10 @@ def classify_peaks(peak_depths, tolerance=0.10):
         depths_str = ', '.join(f'{d:.0f}' for d in peak_depths[:len(expected)])
         return name, True, f'{n}个峰，depth=[{depths_str}]，比值≈{ratio_str}，{desc}'
 
-    # 1:2 符合，但没有更高倍体匹配 -> 视为杂合二倍体
+    # 1:2 符合，但没有更高倍体匹配 -> 视为二倍体
     ratio_str = ':'.join(map(str, [1, 2]))
     depths_str = ', '.join(f'{d:.0f}' for d in peak_depths[:2])
-    return 'diploid_hetero', True, f'{n}个峰，depth=[{depths_str}]，比值≈{ratio_str}，杂合二倍体（其余峰未计入判定）'
-
-
-def merge_peaks(peaks1, peaks2, tolerance=0.15, low_depth_abs=8, low_depth_threshold=50):
-    depths1, freqs1 = peaks1
-    depths2, freqs2 = peaks2
-
-    all_peaks = []
-    for d, f in zip(depths1, freqs1):
-        all_peaks.append({'depth': d, 'freq': f, 'source': 'spe'})
-    for d, f in zip(depths2, freqs2):
-        all_peaks.append({'depth': d, 'freq': f, 'source': 'num'})
-
-    all_peaks.sort(key=lambda x: x['depth'])
-
-    merged = []
-    i = 0
-    while i < len(all_peaks):
-        current = all_peaks[i].copy()
-        j = i + 1
-        while j < len(all_peaks):
-            # 低深度区用绝对值差，高深度区用比例容差
-            if current['depth'] < low_depth_threshold:
-                max_delta = low_depth_abs
-            else:
-                max_delta = np.ceil(tolerance * current['depth'])
-            if abs(all_peaks[j]['depth'] - current['depth']) <= max_delta:
-                if all_peaks[j]['freq'] > current['freq']:
-                    current['freq'] = all_peaks[j]['freq']
-                current['depth'] = (current['depth'] + all_peaks[j]['depth']) / 2
-                current['source'] = 'both'
-                j += 1
-            else:
-                break
-        merged.append(current)
-        i = j
-
-    return merged
+    return 'diploid_hetero', True, f'{n}个峰，depth=[{depths_str}]，比值≈{ratio_str}，二倍体（其余峰未计入判定）'
 
 
 def main_dual(
@@ -440,9 +446,6 @@ def main_dual(
     min_width_left_of_main=3.9,
     min_width_shoulder=4,
     tolerance=0.16,
-    merge_tolerance=0.17,
-    merge_low_depth_abs=7,
-    merge_low_depth_threshold=30,
     low_depth_ratio=0.2,
     low_peak_freq_ratio=0.6,
     spe_left_inflection_threshold=0.75,
@@ -535,7 +538,7 @@ def main_dual(
         for w in warnings:
             print(f"  - {w}")
 
-    # 过滤异常峰后再合并
+    # 过滤异常峰后，分别处理 SpeFreq 与 NumFreq
     spe_mask = np.array([not ab for ab in abnormal_flags_spe], dtype=bool)
     num_mask = np.array([not ab for ab in abnormal_flags_num], dtype=bool)
     peak_depths_spe_f = peak_depths_spe[spe_mask]
@@ -543,7 +546,7 @@ def main_dual(
     peak_depths_num_f = peak_depths_num[num_mask]
     peak_freqs_num_f = peak_freqs_num[num_mask]
 
-    # 在合并前对每份数据单独过滤低深度噪声峰
+    # 每份数据单独过滤低深度噪声峰
     peak_depths_spe_f, peak_freqs_spe_f = filter_low_depth_peak(
         peak_depths_spe_f, peak_freqs_spe_f, tolerance,
         low_depth_ratio, low_peak_freq_ratio
@@ -645,46 +648,21 @@ def main_dual(
             'warnings': warnings,
         }
 
-    # 顺序检测：两个峰时，如果主峰在前且比例为1:2，判为四倍体
-    def check_order_tetraploid(depths, freqs, tolerance):
-        if len(depths) == 2:
-            # 找到频率最高的峰的索引
-            max_freq_idx = np.argmax(freqs)
-            # 如果主峰在前（索引0），检查比例是否为1:2
-            if max_freq_idx == 0:
-                ratio = depths[1] / depths[0]
-                if abs(ratio - 2.0) <= tolerance * 2.0:
-                    return True, f"2个峰，主峰在前，depth=[{depths[0]:.0f}, {depths[1]:.0f}]，比值≈1:2，判定为四倍体"
-        return False, None
-
-    spe_is_order_tetra, spe_order_detail = check_order_tetraploid(peak_depths_spe_f, peak_freqs_spe_f, tolerance)
-    num_is_order_tetra, num_order_detail = check_order_tetraploid(peak_depths_num_f, peak_freqs_num_f, tolerance)
-
-    # 如果两者都符合顺序四倍体，直接返回正常
-    if spe_is_order_tetra and num_is_order_tetra:
-        pattern = 'tetraploid'
-        pattern_cn = to_pattern_cn(pattern)
-        is_normal = True
-        detail = f"SpeFreq与NumFreq均符合顺序四倍体。SpeFreq: {spe_order_detail}; NumFreq: {num_order_detail}"
-        if verbose:
-            print(f"\n顺序检测: 两者均为四倍体")
-            print(f"判定结果: {pattern_cn}")
-            print(f"是否正常: 是")
-            print(f"详情: {detail}")
-        return {
-            'spe_peaks': {'depths': list(peak_depths_spe), 'freqs': list(peak_freqs_spe)},
-            'num_peaks': {'depths': list(peak_depths_num), 'freqs': list(peak_freqs_num)},
-            'merged_peaks': [],
-            'total_peak_count': 0,
-            'pattern': pattern_cn,
-            'is_normal': is_normal,
-            'detail': detail,
-            'warnings': warnings,
-        }
-
     # 分别对 spe 和 num 单独判定
-    spe_pattern, spe_is_normal, spe_detail = classify_peaks(list(peak_depths_spe_f), tolerance)
-    num_pattern, num_is_normal, num_detail = classify_peaks(list(peak_depths_num_f), tolerance)
+    spe_pattern, spe_is_normal, spe_detail = classify_peaks(peak_depths_spe_f, peak_freqs_spe_f, tolerance)
+    num_pattern, num_is_normal, num_detail = classify_peaks(peak_depths_num_f, peak_freqs_num_f, tolerance)
+    spe_pattern_norm = normalize_ploidy_pattern(spe_pattern)
+    num_pattern_norm = normalize_ploidy_pattern(num_pattern)
+
+    if spe_pattern_norm != num_pattern_norm:
+        inconsistency_warning = (
+            f"SpeFreq 与 NumFreq 倍型判断不一致（SpeFreq={to_pattern_cn(spe_pattern_norm)}, "
+            f"NumFreq={to_pattern_cn(num_pattern_norm)}），建议人工复核"
+        )
+        warnings.append(inconsistency_warning)
+        if verbose:
+            print("\n警告信息:")
+            print(f"  - {inconsistency_warning}")
 
     if verbose:
         print(f"\n单独判定:")
@@ -693,7 +671,7 @@ def main_dual(
 
     # 新逻辑：只要有一个不合格就判定为不合格
     if not spe_is_normal or not num_is_normal:
-        pattern = f"{spe_pattern}+{num_pattern}"
+        pattern = f"{spe_pattern_norm}+{num_pattern_norm}" if spe_pattern_norm != num_pattern_norm else spe_pattern_norm
         pattern_cn = to_pattern_cn(pattern)
         is_normal = False
         detail = f"SpeFreq或NumFreq有不合格项。SpeFreq: {spe_detail}; NumFreq: {num_detail}"
@@ -713,7 +691,7 @@ def main_dual(
         }
 
     # 两个都合格，返回正常
-    pattern = spe_pattern
+    pattern = f"{spe_pattern_norm}+{num_pattern_norm}" if spe_pattern_norm != num_pattern_norm else spe_pattern_norm
     pattern_cn = to_pattern_cn(pattern)
     is_normal = True
     detail = f"SpeFreq与NumFreq均合格。SpeFreq: {spe_detail}; NumFreq: {num_detail}"
@@ -740,7 +718,7 @@ if __name__ == '__main__':
         #    左侧鞍部干掉 base_path = '/data/work/zhurui/survey_rec/data/shenshaoqi_data/survey1/X101SC2511/X101SC25114474-Z02-J002/FDSW250056744-1r_1/1.17merFreq'
 
 
-    base_path = 'data/shenshaoqi_data/survey1/X101SC2504/X101SC25045278-Z02-J002/FDES250029975-1r_TTHF/TTHF.17merFreq'
+    base_path = 'data/shenshaoqi_data/survey1/X101SC2504/X101SC25044013-Z02-J010/FDSW250009809-1a_17SPZ_DNA/17SPZ_DNA.17merFreq'
     main_dual(
         spe_filepath=f'{base_path}.SpeFreq.cut',
         num_filepath=f'{base_path}.NumFreq.cut',
