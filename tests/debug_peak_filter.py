@@ -6,7 +6,7 @@
     python tests/debug_peak_filter.py <SpeFreq.cut 或 NumFreq.cut 文件路径> [depth_min] [depth_max]
 
 示例:
-    python tests/debug_peak_filter.py /data/work/zhurui/survey_rec/data/shenshaoqi_data/survey1/X101SC2504/X101SC25045278-Z02-J002/FDES250029975-1r_TTHF/TTHF.17merFreq.NumFreq.cut
+    python tests/debug_peak_filter.py data/shenshaoqi_data/survey1/X101SC2505/X101SC25053664-Z02-J002/FDSW250017709-2r_T1_叶/T1_叶.17merFreq.NumFreq.cut
     python tests/debug_peak_filter.py /path/to/YB.17merFreq.SpeFreq.cut 3 300
 """
 import sys

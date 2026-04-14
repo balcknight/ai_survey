@@ -34,9 +34,15 @@ def load_data(filepath, depth_min=3, depth_max=300):
 
 def detect_peaks(df, smooth_window=11, smooth_poly=3,
                  prominence_ratio=0.04, min_distance=10, min_width=15,
-                 left_min_threshold=0.33, detect_shoulder=True,
+                 left_inflection_threshold=0.33, detect_shoulder=True,
                  shoulder_min_freq_ratio=0.3, shoulder_min_d1_ratio=0.30,
-                 use_smoothing=True, min_width_shoulder=6):
+                 use_smoothing=True, min_width_shoulder=6,
+                 left_min_threshold=None, return_debug=False,
+                 inflection_ignore_min_depth=True, inflection_source_df=None,
+                 inflection_use_smoothing=False):
+    # 兼容旧参数名：left_min_threshold
+    if left_min_threshold is not None:
+        left_inflection_threshold = left_min_threshold
     freq = df['Frequency'].values.astype(float)
     depth = df['Depth'].values
 
@@ -132,26 +138,145 @@ def detect_peaks(df, smooth_window=11, smooth_poly=3,
         # 重新排序
         peaks_idx = np.sort(peaks_idx)
 
-    # 峰型异常检测：检查主峰左侧最低点
+    # 峰型异常检测：检查主峰左侧急降拐点频率
     abnormal_flags = []
     is_abnormal = False
+    debug_info = {
+        'main_peak_depth': None,
+        'main_peak_freq': None,
+        'left_inflection_depth': None,
+        'left_inflection_freq': None,
+        'left_inflection_ratio': None,
+        'left_inflection_threshold': left_inflection_threshold,
+        'left_inflection_method': None,
+    }
     if len(peaks_idx) > 0:
         # 找到主峰（最高峰）
         main_peak_idx = peaks_idx[np.argmax(freq_smooth[peaks_idx])]
         main_peak_freq = freq_smooth[main_peak_idx]
+        debug_info['main_peak_depth'] = float(depth[main_peak_idx])
+        debug_info['main_peak_freq'] = float(main_peak_freq)
+        if main_peak_idx > 0 and main_peak_freq > 0:
+            # 低深度端急降拐点：取主峰左侧“第一个谷底拐点”（一阶导数由负转正）
+            # 该定义对应“先下降后回升”的第一个转折位置，避免把上升陡段误识别为拐点
+            if inflection_source_df is not None and len(inflection_source_df) > 0:
+                src_depth = inflection_source_df['Depth'].values.astype(float)
+                src_freq = inflection_source_df['Frequency'].values.astype(float)
+                if inflection_use_smoothing and len(src_freq) >= smooth_window:
+                    src_freq_smooth = savgol_filter(src_freq, window_length=smooth_window, polyorder=smooth_poly)
+                else:
+                    src_freq_smooth = src_freq.copy()
 
-        # 找主峰左侧的最低点
-        left_min = freq_smooth[:main_peak_idx].min() if main_peak_idx > 0 else 0
-        left_ratio = left_min / main_peak_freq if main_peak_freq > 0 else 0
+                main_peak_depth = depth[main_peak_idx]
+                valid_mask = src_depth <= main_peak_depth
+                if np.any(valid_mask):
+                    left_depth = src_depth[valid_mask]
+                    left_freq = src_freq_smooth[valid_mask]
+                else:
+                    left_depth = depth[:main_peak_idx + 1].astype(float)
+                    left_freq = freq_smooth[:main_peak_idx + 1]
+            else:
+                left_depth = depth[:main_peak_idx + 1].astype(float)
+                left_freq = freq_smooth[:main_peak_idx + 1]
 
-        # 使用传入的阈值判断
-        is_abnormal = left_ratio > left_min_threshold
+            left_d1 = np.gradient(left_freq)
+            left_d1_smooth = left_d1
+            if use_smoothing and len(left_d1) > max(5, smooth_window):
+                left_d1_smooth = savgol_filter(left_d1, window_length=smooth_window, polyorder=smooth_poly)
+
+            search_start_idx = 1 if inflection_ignore_min_depth else 0
+            inflection_idx = None
+
+            # 优先：下降段“第一个减速拐点”（一阶导数局部极大，且导数仍为负）
+            # 适配“肉眼拐点在前、谷底在后”的情况（如 depth≈25）
+            d1_for_bend = left_d1_smooth.copy()
+            if len(d1_for_bend) >= 7:
+                bend_window = min(11, len(d1_for_bend) if len(d1_for_bend) % 2 == 1 else len(d1_for_bend) - 1)
+                if bend_window >= 5:
+                    d1_for_bend = savgol_filter(d1_for_bend, window_length=bend_window, polyorder=2)
+
+            bend_candidates, _ = find_peaks(d1_for_bend, distance=max(1, min_distance // 2))
+            bend_candidates = bend_candidates[bend_candidates >= max(2, search_start_idx)]
+            for idx in bend_candidates:
+                if idx >= len(left_freq) - 1:
+                    continue
+                # 仍在下降段
+                if d1_for_bend[idx] >= 0:
+                    continue
+                # 需要相对前段最陡下降有明显“减速”
+                prev_start = max(0, idx - max(6, min_distance))
+                prev_min = np.min(d1_for_bend[prev_start:idx + 1])
+                if prev_min < 0 and (d1_for_bend[idx] - prev_min) >= abs(prev_min) * 0.35:
+                    inflection_idx = int(idx)
+                    debug_info['left_inflection_method'] = 'first_deceleration_bend'
+                    break
+
+            zc_candidates = np.where((left_d1_smooth[:-1] < 0) & (left_d1_smooth[1:] >= 0))[0] + 1
+            zc_candidates = zc_candidates[zc_candidates >= max(2, search_start_idx)]
+            # 候选点需同时是局部最低点，排除导数抖动造成的伪拐点
+            if len(zc_candidates) > 0:
+                min_keep = []
+                n = len(left_freq)
+                for idx in zc_candidates:
+                    if idx <= 0 or idx >= n - 1:
+                        continue
+                    if left_freq[idx] <= left_freq[idx - 1] and left_freq[idx] <= left_freq[idx + 1]:
+                        min_keep.append(idx)
+                zc_candidates = np.array(min_keep, dtype=int)
+
+            # 同时收集纯局部最低点，处理“真实谷底未形成导数零交叉”的情况
+            left_end_idx = len(left_freq) - 1
+            local_min_candidates = []
+            if left_end_idx > search_start_idx:
+                for idx in range(max(1, search_start_idx), left_end_idx):
+                    if left_freq[idx] <= left_freq[idx - 1] and left_freq[idx] <= left_freq[idx + 1]:
+                        local_min_candidates.append(idx)
+
+            all_candidates = np.array([], dtype=int)
+            if len(zc_candidates) > 0:
+                all_candidates = zc_candidates
+            if len(local_min_candidates) > 0:
+                all_candidates = np.unique(np.concatenate([all_candidates, np.array(local_min_candidates, dtype=int)]))
+
+            if inflection_idx is None and len(all_candidates) > 0:
+                # 从所有有效谷底中选频率最低者，避免误选后续较高谷底（如 depth=17）
+                best_pos = int(np.argmin(left_freq[all_candidates]))
+                inflection_idx = int(all_candidates[best_pos])
+                debug_info['left_inflection_method'] = 'lowest_valley'
+            elif inflection_idx is None:
+                # 兜底：无有效谷底时，使用主峰左侧最低点
+                if left_end_idx > search_start_idx:
+                    rel_idx = int(np.argmin(left_freq[search_start_idx:left_end_idx]))
+                    inflection_idx = rel_idx + search_start_idx
+                else:
+                    inflection_idx = 0
+                debug_info['left_inflection_method'] = 'fallback_left_min'
+
+            inflection_freq = left_freq[inflection_idx]
+            inflection_depth = left_depth[inflection_idx]
+
+            # 用同一条曲线上的主峰频率作分母，避免边界截断造成偏差
+            if inflection_source_df is not None and len(inflection_source_df) > 0:
+                same_depth_idx = np.where(left_depth == depth[main_peak_idx])[0]
+                ref_main_freq = left_freq[int(same_depth_idx[0])] if len(same_depth_idx) > 0 else main_peak_freq
+            else:
+                ref_main_freq = main_peak_freq
+            inflection_ratio = inflection_freq / ref_main_freq if ref_main_freq > 0 else 0
+
+            debug_info['left_inflection_depth'] = float(inflection_depth)
+            debug_info['left_inflection_freq'] = float(inflection_freq)
+            debug_info['left_inflection_ratio'] = float(inflection_ratio)
+            is_abnormal = inflection_ratio >= left_inflection_threshold
+        else:
+            is_abnormal = False
 
         # 所有峰共享同一个异常标记
         abnormal_flags = [is_abnormal] * len(peaks_idx)
 
     peak_depths = depth[peaks_idx]
     peak_freqs = freq_smooth[peaks_idx]
+    if return_debug:
+        return peak_depths, peak_freqs, abnormal_flags, is_abnormal, debug_info
     return peak_depths, peak_freqs, abnormal_flags, is_abnormal
 
 
@@ -315,27 +440,43 @@ def main_dual(
     merge_low_depth_threshold=30,
     low_depth_ratio=0.2,
     low_peak_freq_ratio=0.6,
-    spe_left_min_threshold=0.75,
-    num_left_min_threshold=0.6,
+    spe_left_inflection_threshold=0.75,
+    num_left_inflection_threshold=0.6,
+    inflection_warn_margin=0.1,
     shoulder_min_freq_ratio=0.25,
     all_peaks_too_low_ratio=0.15,
     use_smoothing=True,
     verbose=True,
+    spe_left_min_threshold=None,
+    num_left_min_threshold=None,
 ):
+    # 兼容旧参数名：spe_left_min_threshold / num_left_min_threshold
+    if spe_left_min_threshold is not None:
+        spe_left_inflection_threshold = spe_left_min_threshold
+    if num_left_min_threshold is not None:
+        num_left_inflection_threshold = num_left_min_threshold
+
     df_spe = load_data(spe_filepath, depth_min, depth_max)
-    peak_depths_spe, peak_freqs_spe, abnormal_flags_spe, is_abnormal_spe = detect_peaks(
-        df_spe, smooth_window, smooth_poly, prominence_ratio, min_distance, min_width, spe_left_min_threshold,
+    # 仅用于“第一谷底拐点”检测：忽略主流程 depth_min，避免低深度边界截断导致拐点偏移
+    df_spe_inflection = load_data(spe_filepath, 0, depth_max)
+    peak_depths_spe, peak_freqs_spe, abnormal_flags_spe, is_abnormal_spe, spe_debug = detect_peaks(
+        df_spe, smooth_window, smooth_poly, prominence_ratio, min_distance, min_width, spe_left_inflection_threshold,
         shoulder_min_freq_ratio=shoulder_min_freq_ratio,
         use_smoothing=use_smoothing,
-        min_width_shoulder=min_width_shoulder
+        min_width_shoulder=min_width_shoulder,
+        return_debug=True,
+        inflection_source_df=df_spe_inflection
     )
 
     df_num = load_data(num_filepath, depth_min, depth_max)
-    peak_depths_num, peak_freqs_num, abnormal_flags_num, is_abnormal_num = detect_peaks(
-        df_num, smooth_window, smooth_poly, prominence_ratio, min_distance, min_width, num_left_min_threshold,
+    df_num_inflection = load_data(num_filepath, 0, depth_max)
+    peak_depths_num, peak_freqs_num, abnormal_flags_num, is_abnormal_num, num_debug = detect_peaks(
+        df_num, smooth_window, smooth_poly, prominence_ratio, min_distance, min_width, num_left_inflection_threshold,
         shoulder_min_freq_ratio=shoulder_min_freq_ratio,
         use_smoothing=use_smoothing,
-        min_width_shoulder=min_width_shoulder
+        min_width_shoulder=min_width_shoulder,
+        return_debug=True,
+        inflection_source_df=df_num_inflection
     )
 
     if verbose:
@@ -347,6 +488,45 @@ def main_dual(
         for d, f, ab in zip(peak_depths_num, peak_freqs_num, abnormal_flags_num):
             flag = " [异常峰型，已过滤]" if ab else ""
             print(f"  depth={d:.0f}, frequency={f:.0f}{flag}")
+        if spe_debug['main_peak_depth'] is not None and spe_debug['left_inflection_depth'] is not None:
+            print(
+                "SpeFreq 拐点调试: "
+                f"主峰(depth={spe_debug['main_peak_depth']:.0f}, freq={spe_debug['main_peak_freq']:.0f}), "
+                f"左侧第一拐点(depth={spe_debug['left_inflection_depth']:.0f}, freq={spe_debug['left_inflection_freq']:.0f}), "
+                f"ratio={spe_debug['left_inflection_ratio']:.4f}, "
+                f"threshold={spe_debug['left_inflection_threshold']:.2f}, "
+                f"method={spe_debug.get('left_inflection_method')}"
+            )
+        if num_debug['main_peak_depth'] is not None and num_debug['left_inflection_depth'] is not None:
+            print(
+                "NumFreq 拐点调试: "
+                f"主峰(depth={num_debug['main_peak_depth']:.0f}, freq={num_debug['main_peak_freq']:.0f}), "
+                f"左侧第一拐点(depth={num_debug['left_inflection_depth']:.0f}, freq={num_debug['left_inflection_freq']:.0f}), "
+                f"ratio={num_debug['left_inflection_ratio']:.4f}, "
+                f"threshold={num_debug['left_inflection_threshold']:.2f}, "
+                f"method={num_debug.get('left_inflection_method')}"
+            )
+
+    warnings = []
+
+    def _append_inflection_warning(source_name, debug_info, is_abnormal):
+        ratio = debug_info.get('left_inflection_ratio')
+        threshold = debug_info.get('left_inflection_threshold')
+        if ratio is None or threshold is None or is_abnormal:
+            return
+        warn_low = threshold - inflection_warn_margin
+        if warn_low <= ratio < threshold:
+            warnings.append(
+                f"{source_name} 左侧谷底拐点比例接近阈值（ratio={ratio:.4f}, 阈值={threshold:.2f}），疑似左侧最低点偏高"
+            )
+
+    _append_inflection_warning('SpeFreq', spe_debug, is_abnormal_spe)
+    _append_inflection_warning('NumFreq', num_debug, is_abnormal_num)
+
+    if verbose and len(warnings) > 0:
+        print("\n警告信息:")
+        for w in warnings:
+            print(f"  - {w}")
 
     # 过滤异常峰后再合并
     spe_mask = np.array([not ab for ab in abnormal_flags_spe], dtype=bool)
@@ -392,6 +572,7 @@ def main_dual(
                 'pattern': to_pattern_cn('all_peaks_too_low'),
                 'is_normal': False,
                 'detail': detail,
+                'warnings': warnings,
             }
 
     if len(peak_freqs_num_f) > 0:
@@ -410,6 +591,7 @@ def main_dual(
                 'pattern': to_pattern_cn('all_peaks_too_low'),
                 'is_normal': False,
                 'detail': detail,
+                'warnings': warnings,
             }
 
     # 如果 spe 或 num 检测到 0 个峰，直接判为异常
@@ -432,6 +614,7 @@ def main_dual(
             'pattern': to_pattern_cn('no_peak_detected'),
             'is_normal': False,
             'detail': detail,
+            'warnings': warnings,
         }
 
     # 综合判断前检测：如果 spe 或 num 任一异常，直接判为异常
@@ -443,7 +626,7 @@ def main_dual(
             abnormal_source.append('NumFreq')
         print(f"\n判定结果: {to_pattern_cn('peak_shape_abnormal')}")
         print(f"是否正常: 否")
-        print(f"详情: {'/'.join(abnormal_source)} 主峰左侧最低点过高，峰型异常")
+        print(f"详情: {'/'.join(abnormal_source)} 主峰左侧急降拐点频率过高，峰型异常")
         return {
             'spe_peaks': {'depths': list(peak_depths_spe), 'freqs': list(peak_freqs_spe)},
             'num_peaks': {'depths': list(peak_depths_num), 'freqs': list(peak_freqs_num)},
@@ -451,7 +634,8 @@ def main_dual(
             'total_peak_count': 0,
             'pattern': to_pattern_cn('peak_shape_abnormal'),
             'is_normal': False,
-            'detail': f"{'/'.join(abnormal_source)} 主峰左侧最低点过高，峰型异常",
+            'detail': f"{'/'.join(abnormal_source)} 主峰左侧急降拐点频率过高，峰型异常",
+            'warnings': warnings,
         }
 
     # 顺序检测：两个峰时，如果主峰在前且比例为1:2，判为四倍体
@@ -488,6 +672,7 @@ def main_dual(
             'pattern': pattern_cn,
             'is_normal': is_normal,
             'detail': detail,
+            'warnings': warnings,
         }
 
     # 分别对 spe 和 num 单独判定
@@ -517,6 +702,7 @@ def main_dual(
             'pattern': pattern_cn,
             'is_normal': is_normal,
             'detail': detail,
+            'warnings': warnings,
         }
 
     # 两个都合格，返回正常
@@ -537,6 +723,7 @@ def main_dual(
         'pattern': pattern_cn,
         'is_normal': is_normal,
         'detail': detail,
+        'warnings': warnings,
     }
 
 
@@ -546,7 +733,7 @@ if __name__ == '__main__':
         #    左侧鞍部干掉 base_path = '/data/work/zhurui/survey_rec/data/shenshaoqi_data/survey1/X101SC2511/X101SC25114474-Z02-J002/FDSW250056744-1r_1/1.17merFreq'
 
 
-    base_path = 'data/shenshaoqi_data/survey1/X101SC2504/X101SC25045278-Z02-J002/FDES250029975-1r_TTHF/TTHF.17merFreq'
+    base_path = 'data/shenshaoqi_data/survey1/X101SC2505/X101SC25053664-Z02-J002/FDSW250017709-2r_T1_叶/T1_叶.17merFreq'
     main_dual(
         spe_filepath=f'{base_path}.SpeFreq.cut',
         num_filepath=f'{base_path}.NumFreq.cut',

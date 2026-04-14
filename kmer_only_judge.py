@@ -62,6 +62,7 @@ def judge_kmer_only(sample_dir, verbose=False):
     result = {'sample_dir': sample_dir}
     sample_name = get_sample_name(sample_dir)
     result['sample_name'] = sample_name
+    result['kmer_warning'] = ''
 
     spe_file, num_file = find_kmer_files(sample_dir, sample_name)
     if spe_file and num_file:
@@ -70,14 +71,17 @@ def judge_kmer_only(sample_dir, verbose=False):
             result['kmer_pattern'] = kmer_res['pattern']
             result['kmer_normal'] = kmer_res['is_normal']
             result['kmer_detail'] = kmer_res['detail']
+            result['kmer_warning'] = '；'.join(kmer_res.get('warnings', []))
         except Exception as e:
             result['kmer_pattern'] = 'error'
             result['kmer_normal'] = False
             result['kmer_detail'] = f'kmer判断异常: {e}'
+            result['kmer_warning'] = ''
     else:
         result['kmer_pattern'] = 'missing'
         result['kmer_normal'] = False
         result['kmer_detail'] = 'kmer文件不存在'
+        result['kmer_warning'] = ''
 
     return result
 
@@ -92,7 +96,7 @@ def run_all(max_samples=None, verbose=False, output_path=None):
     print(f'共 {total} 个样本待处理')
     print('=' * 60)
 
-    new_cols = ['kmer峰型', 'kmer是否正常', 'kmer详情', '是否一致']
+    new_cols = ['kmer峰型', 'kmer是否正常', 'kmer详情', 'kmer警告信息', '是否一致']
     for col in new_cols:
         df[col] = ''
 
@@ -112,6 +116,7 @@ def run_all(max_samples=None, verbose=False, output_path=None):
         df.at[i, 'kmer峰型'] = KMER_PATTERN_CN.get(res.get('kmer_pattern', ''), res.get('kmer_pattern', ''))
         df.at[i, 'kmer是否正常'] = '正常' if res.get('kmer_normal') else '异常'
         df.at[i, 'kmer详情'] = res.get('kmer_detail', '')
+        df.at[i, 'kmer警告信息'] = res.get('kmer_warning', '')
 
         original_poisson = str(df.iloc[i].get('是否符合泊松分布', '')).strip()
         kmer_result = df.at[i, 'kmer是否正常']
@@ -119,6 +124,8 @@ def run_all(max_samples=None, verbose=False, output_path=None):
         df.at[i, '是否一致'] = '是' if is_match else '否'
 
         print(f'  kmer峰型: {df.at[i, "kmer峰型"]} | 是否正常: {df.at[i, "kmer是否正常"]}')
+        if df.at[i, 'kmer警告信息']:
+            print(f'  警告信息: {df.at[i, "kmer警告信息"]}')
 
     if output_path is None:
         base, ext = os.path.splitext(EXCEL_PATH)
