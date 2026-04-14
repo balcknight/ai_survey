@@ -37,6 +37,7 @@ def detect_peaks(df, smooth_window=11, smooth_poly=3,
                  left_inflection_threshold=0.33, detect_shoulder=True,
                  shoulder_min_freq_ratio=0.3, shoulder_min_d1_ratio=0.30,
                  use_smoothing=True, min_width_shoulder=6,
+                 min_width_left_of_main=3.9,
                  left_min_threshold=None, return_debug=False,
                  inflection_ignore_min_depth=True, inflection_source_df=None,
                  inflection_use_smoothing=False):
@@ -66,7 +67,10 @@ def detect_peaks(df, smooth_window=11, smooth_poly=3,
     # 使用半高宽过滤窄峰：边界伪峰通常半高宽极小，真实主峰半高宽明显更大
     if len(peaks_idx) > 0:
         widths, _, _, _ = peak_widths(freq_smooth, peaks_idx, rel_height=0.5)
-        peaks_idx = peaks_idx[widths >= min_width]
+        main_peak_idx = peaks_idx[np.argmax(freq_smooth[peaks_idx])]
+        width_thresholds = np.full(len(peaks_idx), float(min_width))
+        width_thresholds[depth[peaks_idx] < depth[main_peak_idx]] = float(min_width_left_of_main)
+        peaks_idx = peaks_idx[widths >= width_thresholds]
     else:
         peaks_idx = np.array([], dtype=int)
 
@@ -433,6 +437,7 @@ def main_dual(
     prominence_ratio=0.009,
     min_distance=10,
     min_width=8,
+    min_width_left_of_main=3.9,
     min_width_shoulder=4,
     tolerance=0.16,
     merge_tolerance=0.17,
@@ -463,6 +468,7 @@ def main_dual(
         df_spe, smooth_window, smooth_poly, prominence_ratio, min_distance, min_width, spe_left_inflection_threshold,
         shoulder_min_freq_ratio=shoulder_min_freq_ratio,
         use_smoothing=use_smoothing,
+        min_width_left_of_main=min_width_left_of_main,
         min_width_shoulder=min_width_shoulder,
         return_debug=True,
         inflection_source_df=df_spe_inflection
@@ -474,6 +480,7 @@ def main_dual(
         df_num, smooth_window, smooth_poly, prominence_ratio, min_distance, min_width, num_left_inflection_threshold,
         shoulder_min_freq_ratio=shoulder_min_freq_ratio,
         use_smoothing=use_smoothing,
+        min_width_left_of_main=min_width_left_of_main,
         min_width_shoulder=min_width_shoulder,
         return_debug=True,
         inflection_source_df=df_num_inflection
@@ -733,7 +740,7 @@ if __name__ == '__main__':
         #    左侧鞍部干掉 base_path = '/data/work/zhurui/survey_rec/data/shenshaoqi_data/survey1/X101SC2511/X101SC25114474-Z02-J002/FDSW250056744-1r_1/1.17merFreq'
 
 
-    base_path = 'data/shenshaoqi_data/survey1/X101SC2505/X101SC25053664-Z02-J002/FDSW250017709-2r_T1_叶/T1_叶.17merFreq'
+    base_path = 'data/shenshaoqi_data/survey1/X101SC2504/X101SC25045278-Z02-J002/FDES250029975-1r_TTHF/TTHF.17merFreq'
     main_dual(
         spe_filepath=f'{base_path}.SpeFreq.cut',
         num_filepath=f'{base_path}.NumFreq.cut',
