@@ -19,7 +19,6 @@ KMER_PATTERN_CN = {
     'high_hetero_diplo': '高杂合二倍体',
     'high_repetitive_diplo': '高重复二倍体',
     'tetraploid': '四倍体',
-    'suspected_polyploid': '疑似多倍体',
     'no_peak': '无峰',
     'unknown': '未知',
     'error': '错误',

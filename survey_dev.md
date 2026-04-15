@@ -175,27 +175,33 @@ all.ntspe.xls 小类文件 每一个样本测序reads比对到具体物种的比
 
 1.先看 all.ntcls.xls
 第一列是物种名，判断是哪一类生物（五个之一），
-1.1 先看top1 是不是该物种所属的生物类别，如果是，则判为pass（2.5分），否则fail（0分）
-1.2 细菌、真菌、病毒的比例总和小于本物种比例的10%（若本物种比例<5%则阈值为20%），则判定pass（没有污染，5分），否则fail（0分）
+1.1 先看 top1 是否为该物种所属类别：是=2分，否=0分
+1.2 非 top1 比例总和 < 所有类别比例总和的10%：是=5分，否=0分
 
 2.再看 all.ntspe.xls
 第一列是物种名，判断是哪一类生物（五个之一），
-看top6中细菌、真菌、病毒 的比例总和都小于2%，则判定pass（没有污染，2.5分），否则fail（0分）
+看 top6 中细菌+真菌+病毒比例总和是否小于动态阈值：
+- 若 top1<5%，阈值=top1的20%
+- 否则阈值=top1的10%
+满足则 +3分，否则 +0分
 
 NT打分等级：
 | 总分 | 等级 |
 |------|------|
 | <4分 | fail |
-| 4~6分 | 重度污染 |
-| 6~8分 | 轻度污染 |
+| 4<=score<6 | 重度污染 |
+| 6<=score<8 | 轻度污染 |
 | >=8分 | 正常 |
 
 
 
 
 ### 判定脚本
-nohup /data/home/zhurui/.conda/envs/zhurui_agent/bin/python survey_judge.py --max 2 > survey_judge.log 2>&1 &
-nohup /data/home/zhurui/.conda/envs/zhurui_agent/bin/python survey_judge.py > survey_judge.log 2>&1 &
+1. 批量判定（Excel）：
+`conda run -n zhurui_agent python survey_judge_batch.py --max 2 --verbose`
+
+2. 单样本判定（在 kmer 结果 JSON 基础上追加 nt/survey）：
+`conda run -n zhurui_agent python survey_judge_single.py --kmer-json data/tmp_kmer_result_with_ai.json --ntcls /path/to/all.ntcls.xls --ntspe /path/to/all.ntspe.xls`
 
 ### 综合判定逻辑
 
@@ -203,8 +209,8 @@ kmer正常时：
 | NT等级 | 综合判定 |
 |--------|---------|
 | 正常/轻度污染 | 正常 |
-| 重度污染 | 轻度污染 |
-| fail | 重度污染 |
+| 重度污染 | 轻度污染（NT得分<=2时不建议流转） |
+| fail | NT得分>=3时轻度污染，否则重度污染 |
 
 kmer异常时：
 | NT等级 | 综合判定 |
@@ -212,18 +218,18 @@ kmer异常时：
 | 正常 | 重度污染 |
 | 其他 | fail |
 
-### 回写字段
+注：当前已移除“疑似多倍体”专门分支，按上述 kmer正常/异常统一处理。
+
+### 输出字段（单样本JSON）
 
 | 字段 | 说明 |
 |------|------|
-| kmer峰型 | 中文峰型名称：纯合二倍体/杂合二倍体/三倍体/高杂合二倍体/四倍体/无峰/未知 |
-| kmer是否正常 | 正常/异常 |
-| NT大类Top1判断 | pass/fail，Top1类别匹配本物种 |
-| NT大类污染判断 | pass/fail，细菌+真菌+病毒比例<本物种比例的10%（本物种<5%时为20%） |
-| NT小类污染判断 | pass/fail，Top6中细菌+真菌+病毒比例<2% |
-| NT得分 | 数值分数（满分10分） |
-| NT等级 | 正常/轻度污染/重度污染/fail |
-| 综合判定 | kmer × NT联合判定结果 |
+| 原始kmer字段 | 保留 `tmp_kmer_result_with_ai.json` 中的全部字段（如 `pattern/is_normal/detail/warnings/analysis_ploidy`） |
+| target_species | 从 `all.ntcls.xls` 读取的目标物种名 |
+| nt_result | NT判定结果对象：`nt_score/nt_level/ntcls_score/ntspe_score/ntcls_detail/ntspe_detail/ntcls_top1_pass/ntcls_contamination_pass/ntspe_contamination_pass` |
+| survey_result | 综合结果对象：`final_level/should_transfer/remark` |
+
+说明：单样本 JSON 输出采用嵌套结构，不再写入顶层平铺重复字段（如 `nt_score/nt_level/final_level/should_transfer`）。
 
 
 
@@ -238,13 +244,6 @@ kmer异常时：
 ('triploid',          [1, 2, 3], '三倍体'),
 ('high_repetitive_diplo', [1, 2, 4], '高重复二倍体'),
 ('tetraploid',        [1, 2, 3, 4], '四倍体'),
-
-
-## 单元测试
-
-- 新增文件：`tests/test_kmer_judge.py`
-- 验证 `classify_peaks` 的新逻辑：从 `1:2` 方向递进判定，并优先匹配最完整倍性模式。
-- 例子：`[23,45,90,135,179]` -> `high_repetitive_diplo`。
 
 
 ## 判定算法
@@ -281,6 +280,9 @@ abnormal_flags.append(left_ratio > 0.9)  # 超过90%标记异常
 detect_peaks 函数签名中有 min_width=15 参数
 main_dual 函数已经外置了 min_width=15（L184），并传递给 detect_peaks
 
+
+## 相关知识 
+
 Prominence 计算原理
 以 depth=49 的峰为例：
 
@@ -306,6 +308,7 @@ prominence = 峰顶频率 - 基准线 = 4,706,528 - 4,527,555 ≈ 178,973
 
 现在把 prominence_ratio 从 0.05 降到 0.04，让 0.0486 能通过。
 
+## 迭代优化（已经实现）
 ### 优化v4
 1.NT大类算所有比例的10%，而不是固定10%
 2.大类里面，改为非本类加一起小于所有比例的10%才算通过

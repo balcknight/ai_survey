@@ -20,7 +20,6 @@ KMER_PATTERN_CN = {
     'high_hetero_diplo': '高杂合二倍体',
     'high_repetitive_diplo': '高重复二倍体',
     'tetraploid': '四倍体',
-    'suspected_polyploid': '疑似多倍体',
     'no_peak': '无峰',
     'unknown': '未知',
     'error': '错误',
@@ -140,22 +139,9 @@ def judge_sample(sample_dir, verbose=False):
 
     # 综合判定：kmer + nt_level 联合
     kmer_normal = result.get('kmer_normal', False)
-    kmer_pattern = result.get('kmer_pattern', '')
     nt_level = result.get('nt_level', 'fail')
     nt_score = result.get('nt_score', 0)
-    is_suspected_polyploid = (kmer_pattern == 'suspected_polyploid')
-
-    # 疑似多倍体特殊处理
-    if is_suspected_polyploid:
-        if nt_score > 2:
-            result['final_level'] = '重度污染'
-            result['should_transfer'] = '否'
-            result['remark'] = '疑似多倍体，如果确定是多倍体，建议流转，否则不流转'
-        else:
-            result['final_level'] = 'fail'
-            result['should_transfer'] = '否'
-            result['remark'] = '疑似多倍体，NT污染严重，不流转'
-    elif kmer_normal:
+    if kmer_normal:
         # kmer正常
         if nt_level in ('正常', '轻度污染'):
             result['final_level'] = '正常'
@@ -287,4 +273,3 @@ if __name__ == '__main__':
     args = parser.parse_args()
 
     run_all(max_samples=args.max, verbose=args.verbose)
-
