@@ -1,6 +1,12 @@
+import json
+import re
+
 import pandas as pd
 import numpy as np
+import requests
 from scipy.signal import find_peaks, peak_widths, savgol_filter
+
+from models.models import get_qwen_plus_llm
 
 PATTERN_CN = {
     'no_peak': '未检测到峰',
@@ -433,6 +439,164 @@ def classify_peaks(peak_depths, peak_freqs=None, tolerance=0.10):
     return 'diploid_hetero', True, f'{n}个峰，depth=[{depths_str}]，比值≈{ratio_str}，二倍体（其余峰未计入判定）'
 
 
+def _normalize_cn_pattern(pattern_cn):
+    if not isinstance(pattern_cn, str):
+        return '未知倍型'
+    if '+' in pattern_cn:
+        return '未知倍型'
+    if pattern_cn in {'二倍体', '三倍体', '四倍体'}:
+        return pattern_cn
+    if pattern_cn in {'未知倍型', '峰型异常', '所有峰过低', '未检测到峰'}:
+        return '未知倍型'
+    return '未知倍型'
+
+
+_SEARCH_BASE_URL = "https://searchapi.xiaosuai.com"
+_SEARCH_ACCESS_KEY = "539vFjvr2m7nwK1mvQAU"
+_SEARCH_ENDPOINT = "qGFHlZVNYlphTeXO"
+
+
+def _search_species_ploidy(species_name, count=5):
+    url = f"{_SEARCH_BASE_URL}/search/{_SEARCH_ENDPOINT}/smart"
+    headers = {"Authorization": f"Bearer {_SEARCH_ACCESS_KEY}"}
+    queries = [
+        f"{species_name} chromosome number ploidy",
+        f"{species_name} polyploid",
+    ]
+    results = []
+    for query in queries:
+        try:
+            resp = requests.get(
+                url,
+                params={"q": query, "count": str(count), "safeSearch": "Moderate", "mkt": "zh-CN"},
+                headers=headers,
+                timeout=20,
+            )
+            resp.raise_for_status()
+            pages = resp.json().get("webPages", {}).get("value", [])
+            for p in pages:
+                results.append(
+                    {
+                        "title": p.get("name", ""),
+                        "url": p.get("url", ""),
+                        "snippet": p.get("snippet", ""),
+                    }
+                )
+        except Exception:
+            continue
+    uniq = []
+    seen = set()
+    for x in results:
+        key = x.get("url", "")
+        if key and key not in seen:
+            seen.add(key)
+            uniq.append(x)
+    return uniq[:8]
+
+
+def _extract_json(text):
+    try:
+        return json.loads(text)
+    except Exception:
+        pass
+    match = re.search(r"\{[\s\S]*\}", text)
+    if match:
+        return json.loads(match.group(0))
+    raise ValueError("无法从模型输出提取JSON")
+
+
+def _analyze_ploidy_by_agent(species_name, result):
+    if not species_name:
+        return {
+            "pattern": "未知倍型",
+            "confidence": "低",
+            "reason": "未提供物种名，无法进行物种先验联网分析。",
+            "sources": [],
+        }
+
+    sources = _search_species_ploidy(species_name)
+    llm = get_qwen_plus_llm()
+    prompt = (
+        "你是倍性分析助手。根据物种先验证据判断该物种更可能的倍型。"
+        "请输出严格JSON，字段: pattern(二倍体/三倍体/四倍体/未知倍型),"
+        "confidence(高/中/低), reason(简要原因), sources(数组,每项含title,url,snippet)。\n"
+        f"物种: {species_name}\n"
+        f"k-mer脚本结果: {json.dumps(result, ensure_ascii=False)}\n"
+        f"联网检索证据: {json.dumps(sources, ensure_ascii=False)}\n"
+    )
+    try:
+        rsp = llm.invoke(prompt)
+        parsed = _extract_json(getattr(rsp, "content", str(rsp)))
+        pattern = _normalize_cn_pattern(parsed.get("pattern"))
+        confidence = parsed.get("confidence", "低")
+        if confidence not in {"高", "中", "低"}:
+            confidence = "低"
+        reason = str(parsed.get("reason", "")).strip() or "未给出明确原因"
+        out_sources = parsed.get("sources", [])
+        if not isinstance(out_sources, list):
+            out_sources = []
+        return {
+            "pattern": pattern,
+            "confidence": confidence,
+            "reason": reason,
+            "sources": out_sources[:8],
+        }
+    except Exception as exc:
+        return {
+            "pattern": "未知倍型",
+            "confidence": "低",
+            "reason": f"agent分析失败: {exc}",
+            "sources": sources[:8],
+        }
+
+
+def _attach_ploidy_analysis(result, tolerance, species_name=None):
+    warnings = result.get('warnings', [])
+    if not isinstance(warnings, list):
+        warnings = [str(warnings)]
+        result['warnings'] = warnings
+
+    if result.get("is_normal") is not True:
+        result['analysis_ploidy'] = {
+            "pattern": "未知倍型",
+            "confidence": "低",
+            "reason": "k-mer判定异常，已跳过物种倍型分析。",
+            "sources": [],
+            "enabled": False,
+        }
+        return result
+
+    analysis = _analyze_ploidy_by_agent(species_name=species_name, result=result)
+    analysis["enabled"] = True
+    result['analysis_ploidy'] = analysis
+
+    script_pattern = _normalize_cn_pattern(result.get('pattern'))
+    analysis_pattern = _normalize_cn_pattern(analysis.get('pattern'))
+
+    if (
+        script_pattern in {'二倍体', '三倍体', '四倍体'}
+        and analysis_pattern in {'二倍体', '三倍体', '四倍体'}
+        and script_pattern != analysis_pattern
+        and analysis.get("confidence") in {"高", "中"}
+    ):
+        reason = (
+            f"脚本判定={script_pattern}，分析判定={analysis_pattern}，两者明显冲突。"
+            f"物种先验依据: {analysis.get('reason', '')}。"
+            "建议转人工复核（检查重复序列干扰、污染、样本混合或测序偏差）。"
+        )
+        warnings.append(reason)
+
+    return result
+
+
+def enrich_kmer_result(result, tolerance=0.16, species_name=None):
+    """
+    给已有的 k-mer 判定结果补充 analysis_ploidy，并在严重冲突时写入 warnings。
+    """
+    result_copy = dict(result)
+    return _attach_ploidy_analysis(result_copy, tolerance, species_name=species_name)
+
+
 def main_dual(
     spe_filepath,
     num_filepath,
@@ -457,6 +621,7 @@ def main_dual(
     verbose=True,
     spe_left_min_threshold=None,
     num_left_min_threshold=None,
+    species_name=None,
 ):
     # 兼容旧参数名：spe_left_min_threshold / num_left_min_threshold
     if spe_left_min_threshold is not None:
@@ -574,7 +739,7 @@ def main_dual(
                 print(f"\n判定结果: {to_pattern_cn('all_peaks_too_low')}")
                 print(f"是否正常: 否")
                 print(f"详情: {detail}")
-            return {
+            return _attach_ploidy_analysis({
                 'spe_peaks': {'depths': list(peak_depths_spe), 'freqs': list(peak_freqs_spe)},
                 'num_peaks': {'depths': list(peak_depths_num), 'freqs': list(peak_freqs_num)},
                 'merged_peaks': [],
@@ -583,7 +748,7 @@ def main_dual(
                 'is_normal': False,
                 'detail': detail,
                 'warnings': warnings,
-            }
+            }, tolerance, species_name=species_name)
 
     if len(peak_freqs_num_f) > 0:
         max_peak_freq_num = peak_freqs_num_f.max()
@@ -593,7 +758,7 @@ def main_dual(
                 print(f"\n判定结果: {to_pattern_cn('all_peaks_too_low')}")
                 print(f"是否正常: 否")
                 print(f"详情: {detail}")
-            return {
+            return _attach_ploidy_analysis({
                 'spe_peaks': {'depths': list(peak_depths_spe), 'freqs': list(peak_freqs_spe)},
                 'num_peaks': {'depths': list(peak_depths_num), 'freqs': list(peak_freqs_num)},
                 'merged_peaks': [],
@@ -602,7 +767,7 @@ def main_dual(
                 'is_normal': False,
                 'detail': detail,
                 'warnings': warnings,
-            }
+            }, tolerance, species_name=species_name)
 
     # 如果 spe 或 num 检测到 0 个峰，直接判为异常
     if len(peak_depths_spe) == 0 or len(peak_depths_num) == 0:
@@ -616,7 +781,7 @@ def main_dual(
             print(f"\n判定结果: {to_pattern_cn('no_peak_detected')}")
             print(f"是否正常: 否")
             print(f"详情: {detail}")
-        return {
+        return _attach_ploidy_analysis({
             'spe_peaks': {'depths': list(peak_depths_spe), 'freqs': list(peak_freqs_spe)},
             'num_peaks': {'depths': list(peak_depths_num), 'freqs': list(peak_freqs_num)},
             'merged_peaks': [],
@@ -625,7 +790,7 @@ def main_dual(
             'is_normal': False,
             'detail': detail,
             'warnings': warnings,
-        }
+        }, tolerance, species_name=species_name)
 
     # 综合判断前检测：如果 spe 或 num 任一异常，直接判为异常
     if is_abnormal_spe or is_abnormal_num:
@@ -637,7 +802,7 @@ def main_dual(
         print(f"\n判定结果: {to_pattern_cn('peak_shape_abnormal')}")
         print(f"是否正常: 否")
         print(f"详情: {'/'.join(abnormal_source)} 主峰左侧急降拐点频率过高，峰型异常")
-        return {
+        return _attach_ploidy_analysis({
             'spe_peaks': {'depths': list(peak_depths_spe), 'freqs': list(peak_freqs_spe)},
             'num_peaks': {'depths': list(peak_depths_num), 'freqs': list(peak_freqs_num)},
             'merged_peaks': [],
@@ -646,7 +811,7 @@ def main_dual(
             'is_normal': False,
             'detail': f"{'/'.join(abnormal_source)} 主峰左侧急降拐点频率过高，峰型异常",
             'warnings': warnings,
-        }
+        }, tolerance, species_name=species_name)
 
     # 分别对 spe 和 num 单独判定
     spe_pattern, spe_is_normal, spe_detail = classify_peaks(peak_depths_spe_f, peak_freqs_spe_f, tolerance)
@@ -679,7 +844,7 @@ def main_dual(
             print(f"\n判定结果: {pattern_cn}")
             print(f"是否正常: 否")
             print(f"详情: {detail}")
-        return {
+        return _attach_ploidy_analysis({
             'spe_peaks': {'depths': list(peak_depths_spe), 'freqs': list(peak_freqs_spe)},
             'num_peaks': {'depths': list(peak_depths_num), 'freqs': list(peak_freqs_num)},
             'merged_peaks': [],
@@ -688,7 +853,7 @@ def main_dual(
             'is_normal': is_normal,
             'detail': detail,
             'warnings': warnings,
-        }
+        }, tolerance, species_name=species_name)
 
     # 两个都合格，返回正常
     pattern = f"{spe_pattern_norm}+{num_pattern_norm}" if spe_pattern_norm != num_pattern_norm else spe_pattern_norm
@@ -700,7 +865,7 @@ def main_dual(
         print(f"是否正常: 是")
         print(f"详情: {detail}")
 
-    return {
+    return _attach_ploidy_analysis({
         'spe_peaks': {'depths': list(peak_depths_spe), 'freqs': list(peak_freqs_spe)},
         'num_peaks': {'depths': list(peak_depths_num), 'freqs': list(peak_freqs_num)},
         'merged_peaks': [],
@@ -709,7 +874,7 @@ def main_dual(
         'is_normal': is_normal,
         'detail': detail,
         'warnings': warnings,
-    }
+    }, tolerance, species_name=species_name)
 
 
 if __name__ == '__main__':

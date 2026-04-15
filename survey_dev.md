@@ -101,6 +101,12 @@ window 越大 → 截止更低 → 越”糊” → 小结构更容易消失（�
 6. 其他情况：按常规比值判定规则处理（每个文件独立判定后再汇总）。
 7. 入口函数：`main_dual(spe_filepath, num_filepath, ...)`
 
+8. 物种先验倍型分析（`analysis_ploidy`）：
+   - 仅当 `kmer是否正常(is_normal)=True` 时启用。
+   - 通过 agent 联网查询物种倍型先验（染色体数/是否有多倍体报道），写入 `analysis_ploidy` 字段。
+   - 若脚本峰型（`pattern`）与 `analysis_ploidy.pattern` 明显冲突，且 `analysis_ploidy.confidence` 为中/高，则在 `warnings` 追加“建议转人工复核”提示。
+   - 若 k-mer 异常（`is_normal=False`），则不做物种先验分析，`analysis_ploidy.enabled=False`。
+
 | 峰数 | 深度比值 | 判定 |
 |------|---------|------|
 | 1 | — | 正常，二倍体 |
@@ -136,6 +142,32 @@ window 越大 → 截止更低 → 越”糊” → 小结构更容易消失（�
 | `shoulder_min_freq_ratio` | 0.25 | 肩峰频率最低比例阈值（25%），肩峰频率需达到全局最高峰的此比例才保留，防止低深度噪声区误检 |
 | `all_peaks_too_low_ratio` | 0.15 | 所有峰太低判定阈值（15%），检测到的最高峰频率低于depth>=10范围内全局最高值的此比例时判为异常（排除depth<10的错误k-mer噪声峰） |
 | `verbose` | True | 是否打印详细检测过程 |
+| `species_name` | None | 物种名；仅在 `is_normal=True` 时用于触发 agent 联网倍型分析并补充 `analysis_ploidy` |
+
+**使用示例**：
+
+1. 正常样本（启用 `analysis_ploidy`）
+```python
+from kmer_judge import main_dual
+
+res = main_dual(
+    spe_filepath="data/.../IAC105.17merFreq.SpeFreq.cut",
+    num_filepath="data/.../IAC105.17merFreq.NumFreq.cut",
+    species_name="锤头双髻鲨",
+    verbose=False,
+)
+print(res["is_normal"], res["analysis_ploidy"]["enabled"], res["analysis_ploidy"]["pattern"])
+```
+
+2. 已有结果补充分析（仅 `is_normal=True` 才会联网）
+```python
+import json
+from kmer_judge import enrich_kmer_result
+
+data = json.load(open("data/tmp_kmer_result.json", "r", encoding="utf-8"))
+data = enrich_kmer_result(data, species_name="锤头双髻鲨")
+print(data["analysis_ploidy"]["enabled"], data["warnings"])
+```
 
 ### NT比对规则（打分制）
 all.ntcls 大类文件，每一个样本测序reads比对到 动物、植物、细菌、真菌、病毒的比例

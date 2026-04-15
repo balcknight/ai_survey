@@ -27,6 +27,31 @@ KMER_PATTERN_CN = {
 }
 
 
+def to_arabic_ploidy(ploidy_text):
+    """将中文/英文倍型描述归一为阿拉伯数字倍型（如 2倍体），无法识别返回空字符串"""
+    s = str(ploidy_text).strip()
+    if not s:
+        return ''
+
+    mapping = {
+        '二倍体': '2倍体',
+        '纯合二倍体': '2倍体',
+        '杂合二倍体': '2倍体',
+        '高杂合二倍体': '2倍体',
+        '高重复二倍体': '2倍体',
+        'diploid': '2倍体',
+        'diploid_homo': '2倍体',
+        'diploid_hetero': '2倍体',
+        'high_hetero_diplo': '2倍体',
+        'high_repetitive_diplo': '2倍体', 
+        '三倍体': '3倍体',
+        'triploid': '3倍体',
+        '四倍体': '4倍体',
+        'tetraploid': '4倍体',
+    }
+    return mapping.get(s, '')
+
+
 def get_real_path(raw_path):
     """将原始路径转换为本地真实路径"""
     parts = str(raw_path).strip().split('/')
@@ -96,7 +121,7 @@ def run_all(max_samples=None, verbose=False, output_path=None):
     print(f'共 {total} 个样本待处理')
     print('=' * 60)
 
-    new_cols = ['kmer峰型', 'kmer是否正常', 'kmer详情', 'kmer警告信息', '是否一致']
+    new_cols = ['kmer峰型', 'kmer是否正常', 'kmer详情', 'kmer警告信息', '是否一致', '倍型判断是否一致']
     for col in new_cols:
         df[col] = ''
 
@@ -122,6 +147,16 @@ def run_all(max_samples=None, verbose=False, output_path=None):
         kmer_result = df.at[i, 'kmer是否正常']
         is_match = (original_poisson == '是' and kmer_result == '正常') or (original_poisson == '否' and kmer_result == '异常')
         df.at[i, '是否一致'] = '是' if is_match else '否'
+
+        if kmer_result == '正常':
+            original_ploidy = str(df.iloc[i].get('物种倍性', '')).strip()
+            kmer_ploidy = to_arabic_ploidy(df.at[i, 'kmer峰型'])
+            if original_ploidy and kmer_ploidy:
+                df.at[i, '倍型判断是否一致'] = '是' if original_ploidy == kmer_ploidy else '否'
+            else:
+                df.at[i, '倍型判断是否一致'] = ''
+        else:
+            df.at[i, '倍型判断是否一致'] = ''
 
         print(f'  kmer峰型: {df.at[i, "kmer峰型"]} | 是否正常: {df.at[i, "kmer是否正常"]}')
         if df.at[i, 'kmer警告信息']:
@@ -149,9 +184,21 @@ def run_all(max_samples=None, verbose=False, output_path=None):
 
     normal_count = sum(1 for i in range(total) if df.at[i, 'kmer是否正常'] == '正常')
     match_count = sum(1 for i in range(total) if df.at[i, '是否一致'] == '是')
+    ploidy_match_count = sum(
+        1 for i in range(total)
+        if df.at[i, 'kmer是否正常'] == '正常' and df.at[i, '倍型判断是否一致'] == '是'
+    )
+    ploidy_mismatch_count = sum(
+        1 for i in range(total)
+        if df.at[i, 'kmer是否正常'] == '正常' and df.at[i, '倍型判断是否一致'] == '否'
+    )
     print('\n' + '=' * 60)
     print(f'处理完成: {total} 个样本，正常 {normal_count} 个，异常 {total - normal_count} 个')
     print(f'一致 {match_count} 个，不一致 {total - match_count} 个')
+    print(
+        f'倍型一致（仅正常样本） {ploidy_match_count} 个，'
+        f'倍型不一致（仅正常样本） {ploidy_mismatch_count} 个'
+    )
     print(f'结果已写入: {output_path}')
 
     return df
