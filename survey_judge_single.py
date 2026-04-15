@@ -1,18 +1,15 @@
 """
 Survey 单样本联合判定脚本
-基于已有 kmer 结果 JSON，补充 NT 判断与最终 survey 结果。
+直接调用 kmer 判断与 NT 判断，输出最终 survey 结果。
 """
-
-import argparse
-import json
-from pathlib import Path
 
 import pandas as pd
 
+from kmer_judge import main_dual
 from nt_judge import judge_nt_contamination
 
 
-def load_target_species(ntcls_path: Path) -> str:
+def load_target_species(ntcls_path: str) -> str:
     """从 all.ntcls.xls 第一行读取目标物种名。"""
     df_cls = pd.read_csv(ntcls_path, sep='\t')
     return str(df_cls.iloc[0]['Sample name'])
@@ -66,48 +63,44 @@ def build_final_survey(kmer_result: dict, nt_result: dict) -> dict:
     return final
 
 
-def append_nt_and_survey(
-    kmer_json_path: Path,
-    ntcls_path: Path,
-    ntspe_path: Path,
-    output_path: Path | None = None,
+def run_single_survey(
+    spe_path: str,
+    num_path: str,
+    ntcls_path: str,
+    ntspe_path: str,
+    verbose: bool = True,
 ) -> dict:
-    """读取 kmer JSON，追加 nt_result/survey_result 字段并写回。"""
-    with open(kmer_json_path, 'r', encoding='utf-8') as f:
-        result = json.load(f)
-
+    """执行单样本联合判定（kmer + NT），并返回汇总结果。"""
+    result = main_dual(
+        spe_filepath=spe_path,
+        num_filepath=num_path,
+        verbose=verbose,
+    )
     target_species = load_target_species(ntcls_path)
-    nt_result = judge_nt_contamination(str(ntcls_path), str(ntspe_path), target_species)
+    nt_result = judge_nt_contamination(ntcls_path, ntspe_path, target_species)
     survey_result = build_final_survey(result, nt_result)
 
     result['target_species'] = target_species
     result['nt_result'] = nt_result
     result['survey_result'] = survey_result
 
-    save_path = output_path or kmer_json_path
-    with open(save_path, 'w', encoding='utf-8') as f:
-        json.dump(result, f, ensure_ascii=False, indent=2)
-
     return result
 
 
 def main():
-    parser = argparse.ArgumentParser(description='Survey 单样本联合判定')
-    parser.add_argument(
-        '--kmer-json',
-        default='data/tmp_kmer_result_with_ai.json',
-        help='已有 kmer 结果 JSON 路径',
-    )
-    parser.add_argument('--ntcls', required=True, help='all.ntcls.xls 路径')
-    parser.add_argument('--ntspe', required=True, help='all.ntspe.xls 路径')
-    parser.add_argument('--output', default=None, help='输出 JSON 路径，默认覆盖 --kmer-json')
-    args = parser.parse_args()
+    # 直接在这里修改路径即可（适配 VSCode 直接运行）
+    spe_path = 'data/your_sample.17merFreq.SpeFreq.cut'
+    num_path = 'data/your_sample.17merFreq.NumFreq.cut'
+    ntcls_path = 'data/your_sample/all.ntcls.xls'
+    ntspe_path = 'data/your_sample/all.ntspe.xls'
+    verbose = True
 
-    merged = append_nt_and_survey(
-        kmer_json_path=Path(args.kmer_json),
-        ntcls_path=Path(args.ntcls),
-        ntspe_path=Path(args.ntspe),
-        output_path=Path(args.output) if args.output else None,
+    merged = run_single_survey(
+        spe_path=spe_path,
+        num_path=num_path,
+        ntcls_path=ntcls_path,
+        ntspe_path=ntspe_path,
+        verbose=verbose,
     )
 
     print('单样本联合判定完成')

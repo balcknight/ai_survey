@@ -1,3 +1,8 @@
+## 文档边界说明
+- 本文档仅维护判定规则与判定脚本说明（kmer/nt/survey规则）。
+- 后端系统设计、数据库结构、接口与迭代路线见 `docs/` 目录：
+  - `docs/backend_v1.md`
+  - `docs/backend_roadmap.md`
 
 ## 数据处理
 /data/work/zhurui/survey_rec/data/survey 信息表.xlsx
