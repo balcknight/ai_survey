@@ -14,6 +14,7 @@ export const useCasesStore = defineStore('cases', () => {
   const selectedCaseId = ref<number | null>(null)
   const selectedCase = ref<CaseDetail | null>(null)
   const loadingDetail = ref(false)
+  const boardDrawerVisible = ref(false)
 
   const runningType = ref<RunType | null>(null)
   const checkingFiles = ref(false)
@@ -42,8 +43,8 @@ export const useCasesStore = defineStore('cases', () => {
         should_transfer: filters.value.should_transfer || undefined,
         status: filters.value.status || undefined,
       })
-      list.value = data.items
-      total.value = data.total
+      list.value = Array.isArray(data.items) ? data.items : []
+      total.value = Number.isFinite(data.total) ? data.total : list.value.length
     } finally {
       loadingList.value = false
     }
@@ -51,6 +52,7 @@ export const useCasesStore = defineStore('cases', () => {
 
   async function selectCase(caseId: number) {
     selectedCaseId.value = caseId
+    boardDrawerVisible.value = true
     loadingDetail.value = true
     try {
       selectedCase.value = await getCaseDetail(caseId)
@@ -132,8 +134,13 @@ export const useCasesStore = defineStore('cases', () => {
     if (selectedCaseId.value === caseId) {
       selectedCaseId.value = null
       selectedCase.value = null
+      boardDrawerVisible.value = false
     }
     await fetchList()
+  }
+
+  function closeBoardDrawer() {
+    boardDrawerVisible.value = false
   }
 
   function resetFilters() {
@@ -154,6 +161,7 @@ export const useCasesStore = defineStore('cases', () => {
     selectedCaseId,
     selectedCase,
     loadingDetail,
+    boardDrawerVisible,
     runningType,
     checkingFiles,
     filters,
@@ -165,6 +173,7 @@ export const useCasesStore = defineStore('cases', () => {
     runByPath,
     rerunSelectedCase,
     removeSelectedCase,
+    closeBoardDrawer,
     resetFilters,
   }
 })

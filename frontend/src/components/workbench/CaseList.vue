@@ -2,6 +2,7 @@
 import { computed, onMounted } from 'vue'
 import { useCasesStore } from '../../stores/cases'
 import type { CaseSummary } from '../../types/case'
+import { getFinalLevelTagType, getStatusTagType } from '../../constants/case-tags'
 
 const store = useCasesStore()
 
@@ -37,9 +38,6 @@ const currentPage = computed({
 
 async function loadList() {
   await store.fetchList()
-  if (store.list.length > 0 && store.selectedCaseId === null) {
-    await store.selectCase(store.list[0].id)
-  }
 }
 
 function onRowClick(row: CaseSummary) {
@@ -59,6 +57,10 @@ async function onReset() {
 async function onPageChange(page: number) {
   currentPage.value = page
   await loadList()
+}
+
+function rowClassName({ row }: { row: CaseSummary }) {
+  return row.id === store.selectedCaseId ? 'case-list__row--active' : ''
 }
 
 onMounted(async () => {
@@ -96,14 +98,28 @@ onMounted(async () => {
       height="calc(100vh - 450px)"
       highlight-current-row
       row-key="id"
+      :current-row-key="store.selectedCaseId ?? undefined"
+      :row-class-name="rowClassName"
       @row-click="onRowClick"
     >
       <el-table-column prop="id" label="ID" width="70" />
       <el-table-column prop="sample_code" label="sample_code" min-width="160" show-overflow-tooltip />
       <el-table-column prop="target_species" label="target_species" min-width="120" show-overflow-tooltip />
-      <el-table-column prop="final_level" label="final_level" width="110" />
+      <el-table-column prop="final_level" label="final_level" width="130">
+        <template #default="{ row }">
+          <el-tag size="small" :type="getFinalLevelTagType(row.final_level)">
+            {{ row.final_level || '-' }}
+          </el-tag>
+        </template>
+      </el-table-column>
       <el-table-column prop="should_transfer" label="transfer" width="90" />
-      <el-table-column prop="status" label="status" width="110" />
+      <el-table-column prop="status" label="status" width="120">
+        <template #default="{ row }">
+          <el-tag size="small" :type="getStatusTagType(row.status)">
+            {{ row.status }}
+          </el-tag>
+        </template>
+      </el-table-column>
       <el-table-column prop="updated_at" label="updated_at" min-width="170" show-overflow-tooltip />
     </el-table>
 
@@ -145,5 +161,11 @@ onMounted(async () => {
   .filters {
     grid-template-columns: repeat(2, minmax(120px, 1fr));
   }
+}
+</style>
+
+<style>
+.case-list__row--active td.el-table__cell {
+  background-color: #ecf5ff !important;
 }
 </style>

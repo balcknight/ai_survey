@@ -67,8 +67,53 @@ BASE_URL="http://127.0.0.1:8001"
 SAMPLE_DIR="/data/work/zhurui/survey_rec/data/shenshaoqi_data/survey1/X101SC2507/X101SC25070200-Z01-J002/FDSW250019884-2a_百花山C-嫩茎_1管"
 
 SAMPLE_DIR1="data/shenshaoqi_data_v2/1"
+```
 
+## 0) 列表查询（GET /api/cases）
+### 请求参数
+- `limit`：返回条数，默认 `20`，范围 `1~200`
+- `offset`：偏移量，默认 `0`
+- `target_species`：按目标物种模糊匹配（`contains`）
+- `final_level`：按最终等级精确匹配
+- `should_transfer`：按是否转移精确匹配（如 `是/否`）
+- `status`：按状态精确匹配（`created|kmer_done|nt_done|judged|failed`）
 
+### curl 示例（可直接执行）
+```bash
+# 基础分页（第一页）
+curl -G "$BASE_URL/api/cases" \
+  --data-urlencode "limit=20" \
+  --data-urlencode "offset=0"
+
+# 分页（第二页）
+curl -G "$BASE_URL/api/cases" \
+  --data-urlencode "limit=20" \
+  --data-urlencode "offset=20"
+
+# 按目标物种筛选（模糊匹配）
+curl -G "$BASE_URL/api/cases" \
+  --data-urlencode "target_species=手掌参"
+
+# 按最终等级筛选
+curl -G "$BASE_URL/api/cases" \
+  --data-urlencode "final_level=重度污染"
+
+# 按是否转移筛选
+curl -G "$BASE_URL/api/cases" \
+  --data-urlencode "should_transfer=否"
+
+# 按状态筛选
+curl -G "$BASE_URL/api/cases" \
+  --data-urlencode "status=judged"
+
+# 组合筛选（推荐）
+curl -G "$BASE_URL/api/cases" \
+  --data-urlencode "target_species=手掌参" \
+  --data-urlencode "final_level=重度污染" \
+  --data-urlencode "should_transfer=否" \
+  --data-urlencode "status=judged" \
+  --data-urlencode "limit=20" \
+  --data-urlencode "offset=0"
 ```
 
 ## 1) 检查文件但不执行

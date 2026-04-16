@@ -2,13 +2,16 @@
 import RunPanel from '../components/workbench/RunPanel.vue'
 import CaseList from '../components/workbench/CaseList.vue'
 import CaseBoard from '../components/workbench/CaseBoard.vue'
+import { useCasesStore } from '../stores/cases'
+
+const store = useCasesStore()
 </script>
 
 <template>
   <div class="workbench-page">
     <header class="workbench-page__header">
       <h1>Survey 判定工作台</h1>
-      <p>支持按路径执行 kmer / nt / survey，左侧列表点击后右侧展示详情看板。</p>
+      <p>支持按路径执行 kmer / nt / survey，点击样本后以抽屉形式展示详情看板。</p>
     </header>
 
     <RunPanel />
@@ -17,10 +20,19 @@ import CaseBoard from '../components/workbench/CaseBoard.vue'
       <div class="workbench-page__list">
         <CaseList />
       </div>
-      <div class="workbench-page__board">
-        <CaseBoard />
-      </div>
     </section>
+
+    <el-drawer
+      v-model="store.boardDrawerVisible"
+      direction="ltr"
+      size="56%"
+      destroy-on-close
+      :with-header="false"
+      class="workbench-page__drawer"
+      @closed="store.closeBoardDrawer"
+    >
+      <CaseBoard />
+    </el-drawer>
   </div>
 </template>
 
@@ -52,20 +64,20 @@ import CaseBoard from '../components/workbench/CaseBoard.vue'
 }
 
 .workbench-page__main {
-  display: grid;
-  gap: 12px;
-  grid-template-columns: minmax(460px, 1fr) minmax(560px, 1.2fr);
   min-height: calc(100vh - 240px);
 }
 
-.workbench-page__list,
-.workbench-page__board {
+.workbench-page__list {
   min-height: 100%;
 }
 
-@media (max-width: 1400px) {
-  .workbench-page__main {
-    grid-template-columns: 1fr;
+.workbench-page__drawer :deep(.el-drawer__body) {
+  padding: 0;
+}
+
+@media (max-width: 1200px) {
+  .workbench-page__drawer {
+    width: 92% !important;
   }
 }
 </style>

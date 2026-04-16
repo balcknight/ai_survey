@@ -1,5 +1,5 @@
 import http from './http'
-import type { CaseDetail, CaseListResponse, FileCheckResponse, RunRequest, RunResponse } from '../types/case'
+import type { CaseDetail, CaseListResponse, CaseSummary, FileCheckResponse, RunRequest, RunResponse } from '../types/case'
 
 export interface ListQuery {
   limit: number
@@ -11,8 +11,36 @@ export interface ListQuery {
 }
 
 export async function getCases(params: ListQuery): Promise<CaseListResponse> {
-  const { data } = await http.get('/api/cases', { params })
-  return data
+  const response = await http.get('/api/cases', { params })
+  const data = response.data as unknown
+
+  // 兼容两种后端返回：
+  // 1) 直接返回数组：CaseSummary[]
+  // 2) 分页对象：{ items, total, limit, offset }
+  if (Array.isArray(data)) {
+    return {
+      items: data as CaseSummary[],
+      total: data.length,
+      limit: params.limit,
+      offset: params.offset,
+    }
+  }
+
+  const payload = (data ?? {}) as Partial<CaseListResponse>
+  const items = Array.isArray(payload.items) ? payload.items : []
+  const headerTotal = Number(response.headers?.['x-total-count'])
+  const total = Number.isFinite(payload.total)
+    ? Number(payload.total)
+    : Number.isFinite(headerTotal)
+      ? headerTotal
+      : params.offset + items.length
+
+  return {
+    items,
+    total,
+    limit: Number.isFinite(payload.limit) ? Number(payload.limit) : params.limit,
+    offset: Number.isFinite(payload.offset) ? Number(payload.offset) : params.offset,
+  }
 }
 
 export async function getCaseDetail(caseId: number): Promise<CaseDetail> {

@@ -66,6 +66,93 @@ VITE_API_BASE_URL=http://192.168.20.24:8001
 - `src/api/cases.ts`：cases 相关 API 封装
 - `src/types/case.ts`：类型定义
 
+### 5.1 `SurveyWorkbenchView.vue`（页面编排层）
+- 职责：只做页面布局与组件装配，不承载业务逻辑。
+- 组成：
+  - 顶部说明区（标题、功能引导）
+  - `RunPanel`（触发执行）
+  - `CaseList`（列表筛选与选择）
+  - `el-drawer + CaseBoard`（详情抽屉）
+- 与 Store 关系：
+  - 仅依赖 `boardDrawerVisible` 控制抽屉显隐。
+  - 关闭抽屉时调用 `closeBoardDrawer()`，不直接修改业务数据。
+
+### 5.2 `RunPanel.vue`（执行入口层）
+- 职责：收集 `sample_dir / sample_code`，触发后端执行或文件检查。
+- 输入：
+  - `sample_dir`（必填）
+  - `sample_code`（可选）
+- 动作映射：
+  - `仅检查文件` -> `store.checkFiles(sampleDir)`
+  - `执行 kmer/nt/survey` -> `store.runByPath(type, sampleDir, sampleCode)`
+- 交互规范：
+  - 空路径先本地拦截，避免无效请求。
+  - 按钮通过 `checkingFiles / runningType` 做防重入。
+  - 展示 `file_check`（`kmer_complete / nt_complete / complete / missing`）供用户快速判断是否可执行。
+
+### 5.3 `CaseList.vue`（列表与筛选层）
+- 职责：展示样本摘要列表，提供筛选、分页、行选择。
+- 关键状态来源：
+  - 列表数据：`store.list`
+  - 加载态：`store.loadingList`
+  - 总数：`store.total`
+  - 筛选参数：`store.filters`
+- 关键行为：
+  - 组件挂载时执行 `loadList()` 拉取第一页。
+  - 点击行触发 `store.selectCase(row.id)`，并联动打开详情抽屉。
+  - 查询时重置 `offset=0`；重置时恢复默认筛选。
+- 视觉语义：
+  - `final_level` 与 `status` 使用 Tag 颜色映射常量统一管理。
+  - 当前选中行使用高亮类名 `case-list__row--active`。
+
+### 5.4 `CaseBoard.vue`（详情展示与高风险操作层）
+- 职责：展示完整样本详情，并承载“重跑/删除”高风险动作。
+- 内容分区：
+  - 摘要信息（主字段概览）
+  - Kmer 结果
+  - NT 结果
+  - Survey + Result Metrics（含 `raw/adjusted` 对比表）
+- 关键行为：
+  - 监听 `selectedCaseId`，切换样本时重置 remark 展开态。
+  - “重跑 survey”“删除”均要求确认弹窗（二次确认）。
+
+### 5.5 `stores/cases.ts`（业务中枢）
+- 职责：统一管理列表、详情、执行、筛选、抽屉等前端业务状态。
+- 核心动作：
+  - `fetchList`：按筛选参数查询列表
+  - `selectCase`：加载详情并打开抽屉
+  - `runByPath`：执行后刷新列表并自动定位到新样本
+  - `rerunSelectedCase / removeSelectedCase`：高风险动作封装
+- 设计原则：
+  - 组件尽量“薄”，业务副作用集中在 Store，便于联调和排障。
+
+### 5.6 `api/http.ts`（HTTP 基础设施层）
+- 职责：封装 axios 实例、超时、开发日志、全局异常提示。
+- 统一错误语义：
+  - 网络错误：提示后端不可达
+  - `409`：重复路径冲突
+  - `404`：记录不存在
+  - `500`：服务端异常
+
+### 5.7 `api/cases.ts`（接口适配层）
+- 职责：提供 cases 领域 API 函数，隔离后端响应细节。
+- 约定：
+  - 前端内部统一消费 `CaseListResponse`（`items/total/limit/offset`）。
+  - `getCases` 已兼容两类后端返回：
+    - 直接数组：`CaseSummary[]`
+    - 分页对象：`{ items, total, limit, offset }`
+  - 通过适配层归一化，避免组件层直接处理兼容逻辑。
+
+### 5.8 `types/case.ts`（领域类型层）
+- 职责：集中维护 Case 相关类型，作为组件、Store、API 的契约。
+- 重点类型：
+  - `CaseSummary`：列表字段集合
+  - `CaseDetail`：详情字段集合
+  - `RunResponse`：执行接口返回
+  - `FileCheckResponse`：文件检查返回
+- 价值：
+  - 在开发期尽早暴露字段缺失、类型不匹配和接口变更风险。
+
 ## 6. 状态与数据流
 
 ### 6.1 Store 状态
