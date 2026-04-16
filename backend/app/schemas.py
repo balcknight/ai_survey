@@ -22,7 +22,7 @@ class AnalysisPloidy(BaseModel):
 
 class PeaksData(BaseModel):
     depths: list[int] = Field(default_factory=list)
-    freqs: list[int] = Field(default_factory=list)
+    freqs: list[float] = Field(default_factory=list)
 
 
 class KmerResultIn(BaseModel):
@@ -138,3 +138,54 @@ class CaseDetailOut(BaseModel):
     nt_result: NtResultOut | None = None
     survey_result: SurveyResultOut | None = None
 
+
+class FileCheckOut(BaseModel):
+    spe_path: str | None = None
+    num_path: str | None = None
+    ntcls_path: str | None = None
+    ntspe_path: str | None = None
+    missing: list[str] = Field(default_factory=list)
+    kmer_complete: bool = False
+    nt_complete: bool = False
+    complete: bool = False
+
+
+class RunByPathIn(BaseModel):
+    sample_dir: str
+    sample_code: str | None = None
+    verbose: bool = True
+
+
+class RunByPathOut(BaseModel):
+    sample_dir: str
+    file_check: FileCheckOut
+    executed: bool = False
+    message: str
+    case_id: int | None = None
+    case_detail: CaseDetailOut | None = None
+
+
+class CheckByPathIn(BaseModel):
+    sample_dir: str
+
+
+class CheckByPathOut(BaseModel):
+    sample_dir: str
+    file_check: FileCheckOut
+    message: str
+
+
+class RunStepByPathIn(BaseModel):
+    sample_dir: str
+    sample_code: str | None = None
+    case_id: int | None = None
+    verbose: bool = True
+
+
+class RunStepByPathOut(BaseModel):
+    sample_dir: str
+    executed: bool
+    message: str
+    file_check: FileCheckOut
+    case_id: int | None = None
+    case_detail: CaseDetailOut | None = None

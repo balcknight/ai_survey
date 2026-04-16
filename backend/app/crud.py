@@ -129,6 +129,77 @@ def import_case_from_survey_json(
     return create_case(db, case_payload)
 
 
+def ensure_case(
+    db: Session,
+    target_species: str,
+    sample_code: str | None = None,
+    source_path: str | None = None,
+    case_id: int | None = None,
+) -> models.SurveyCase:
+    if case_id is not None:
+        obj = db.execute(select(models.SurveyCase).where(models.SurveyCase.id == case_id)).scalar_one_or_none()
+        if obj is None:
+            raise ValueError(f"case_id={case_id} 不存在")
+        if sample_code and not obj.sample_code:
+            obj.sample_code = sample_code
+        if source_path and not obj.source_path:
+            obj.source_path = source_path
+        if target_species and obj.target_species != target_species:
+            obj.target_species = target_species
+        db.commit()
+        db.refresh(obj)
+        return obj
+
+    obj = models.SurveyCase(
+        sample_code=sample_code,
+        target_species=target_species,
+        source_path=source_path,
+        status="created",
+    )
+    db.add(obj)
+    db.commit()
+    db.refresh(obj)
+    return obj
+
+
+def save_kmer_result(db: Session, case_id: int, payload: schemas.KmerResultIn) -> models.SurveyCase:
+    obj = db.execute(select(models.SurveyCase).where(models.SurveyCase.id == case_id)).scalar_one_or_none()
+    if obj is None:
+        raise ValueError(f"case_id={case_id} 不存在")
+    _upsert_kmer(db, case_id, payload)
+    if obj.status == "created":
+        obj.status = "kmer_done"
+    db.commit()
+    db.refresh(obj)
+    return obj
+
+
+def save_nt_result(db: Session, case_id: int, payload: schemas.NtResultIn) -> models.SurveyCase:
+    obj = db.execute(select(models.SurveyCase).where(models.SurveyCase.id == case_id)).scalar_one_or_none()
+    if obj is None:
+        raise ValueError(f"case_id={case_id} 不存在")
+    _upsert_nt(db, case_id, payload)
+    if obj.status in ("created", "kmer_done"):
+        obj.status = "nt_done"
+    db.commit()
+    db.refresh(obj)
+    return obj
+
+
+def save_survey_result(db: Session, case_id: int, payload: schemas.SurveyResultIn) -> models.SurveyCase:
+    obj = db.execute(select(models.SurveyCase).where(models.SurveyCase.id == case_id)).scalar_one_or_none()
+    if obj is None:
+        raise ValueError(f"case_id={case_id} 不存在")
+    survey = _upsert_survey(db, case_id, payload)
+    obj.final_level = survey.final_level
+    obj.should_transfer = survey.should_transfer
+    obj.remark = survey.remark
+    obj.status = "judged"
+    db.commit()
+    db.refresh(obj)
+    return obj
+
+
 def list_cases(
     db: Session,
     limit: int = 20,
@@ -249,4 +320,3 @@ def to_case_detail_out(obj: models.SurveyCase) -> schemas.CaseDetailOut:
         nt_result=nt_out,
         survey_result=survey_out,
     )
-

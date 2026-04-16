@@ -505,6 +505,23 @@ def _extract_json(text):
     raise ValueError("无法从模型输出提取JSON")
 
 
+def _to_jsonable(obj):
+    """将 numpy/容器对象递归转换为可 JSON 序列化的原生类型。"""
+    if isinstance(obj, dict):
+        return {k: _to_jsonable(v) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple)):
+        return [_to_jsonable(x) for x in obj]
+    if isinstance(obj, np.ndarray):
+        return [_to_jsonable(x) for x in obj.tolist()]
+    if isinstance(obj, np.integer):
+        return int(obj)
+    if isinstance(obj, np.floating):
+        return float(obj)
+    if isinstance(obj, np.bool_):
+        return bool(obj)
+    return obj
+
+
 def _analyze_ploidy_by_agent(species_name, result):
     if not species_name:
         return {
@@ -521,8 +538,8 @@ def _analyze_ploidy_by_agent(species_name, result):
         "请输出严格JSON，字段: pattern(二倍体/三倍体/四倍体/未知倍型),"
         "confidence(高/中/低), reason(简要原因), sources(数组,每项含title,url,snippet)。\n"
         f"物种: {species_name}\n"
-        f"k-mer脚本结果: {json.dumps(result, ensure_ascii=False)}\n"
-        f"联网检索证据: {json.dumps(sources, ensure_ascii=False)}\n"
+        f"k-mer脚本结果: {json.dumps(_to_jsonable(result), ensure_ascii=False)}\n"
+        f"联网检索证据: {json.dumps(_to_jsonable(sources), ensure_ascii=False)}\n"
     )
     try:
         rsp = llm.invoke(prompt)

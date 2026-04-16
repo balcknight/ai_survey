@@ -47,6 +47,154 @@
 - `POST /api/cases/import-survey-json` 导入完整 JSON 结果
 - `GET /api/cases` 列表查询（`limit/offset/target_species/final_level/should_transfer/status`）
 - `GET /api/cases/{case_id}` 样本详情
+- `POST /api/cases/check-by-path` 只检查样本目录文件是否齐全（不执行判定）
+- `POST /api/cases/run-kmer` 输入样本目录，执行 kmer 判定并入库
+- `POST /api/cases/run-nt` 输入样本目录，执行 NT 判定并入库
+- `POST /api/cases/run-survey` 输入样本目录，执行 kmer+nt+综合判定并入库
+- `POST /api/cases/run-by-path` 输入样本目录，自动检查 4 个必需文件；若齐全则执行完整 survey 判定并入库
+
+## 通用测试前缀
+```bash
+BASE_URL="http://127.0.0.1:8000"
+SAMPLE_DIR="/data/work/zhurui/survey_rec/data/shenshaoqi_data/survey1/X101SC2507/X101SC25070200-Z01-J002/FDSW250019884-2a_百花山C-嫩茎_1管"
+```
+
+## 1) 检查文件但不执行
+### 请求参数
+- `sample_dir`：样本目录绝对路径或相对路径
+
+### curl 示例
+```bash
+curl -X POST "$BASE_URL/api/cases/check-by-path" \
+  -H "Content-Type: application/json" \
+  -d "{
+    \"sample_dir\": \"$SAMPLE_DIR\"
+  }"
+```
+
+### 返回关键字段
+- `file_check.kmer_complete`：是否具备 kmer 执行条件（SpeFreq+NumFreq）
+- `file_check.nt_complete`：是否具备 NT 执行条件（ntcls+ntspe）
+- `file_check.complete`：是否具备 survey 执行条件（四文件齐全）
+- `file_check.missing`：缺失文件列表
+
+### 响应示例
+```json
+{
+  "sample_dir": "/path/to/sample",
+  "file_check": {
+    "spe_path": "/path/to/sample/a.SpeFreq.cut",
+    "num_path": "/path/to/sample/a.NumFreq.cut",
+    "ntcls_path": "/path/to/sample/all.ntcls.xls",
+    "ntspe_path": "/path/to/sample/all.ntspe.xls",
+    "missing": [],
+    "kmer_complete": true,
+    "nt_complete": true,
+    "complete": true
+  },
+  "message": "文件齐全，可执行完整 survey 判定"
+}
+```
+
+## 2) run-kmer
+### 请求参数
+- `sample_dir`：样本目录
+- `sample_code`：样本编号（可选）
+- `case_id`：已有 case 时可传，传了就更新该 case（可选）
+- `verbose`：是否打印详细日志（默认 `true`）
+
+### curl 示例
+```bash
+curl -X POST "$BASE_URL/api/cases/run-kmer" \
+  -H "Content-Type: application/json" \
+  -d "{
+    \"sample_dir\": \"$SAMPLE_DIR\",
+    \"sample_code\": \"FDSW250019884-2a\",
+    \"verbose\": false
+  }"
+```
+
+## 3) run-nt
+### 请求参数
+- 同 `run-kmer`
+
+### curl 示例
+```bash
+curl -X POST "$BASE_URL/api/cases/run-nt" \
+  -H "Content-Type: application/json" \
+  -d "{
+    \"sample_dir\": \"$SAMPLE_DIR\",
+    \"sample_code\": \"FDSW250019884-2a\",
+    \"verbose\": false
+  }"
+```
+
+## 4) run-survey（推荐前端主按钮）
+### 请求参数
+- 同 `run-kmer`
+
+### curl 示例
+```bash
+curl -X POST "$BASE_URL/api/cases/run-survey" \
+  -H "Content-Type: application/json" \
+  -d "{
+    \"sample_dir\": \"$SAMPLE_DIR\",
+    \"sample_code\": \"FDSW250019884-2a\",
+    \"verbose\": false
+  }"
+```
+
+## 5) run-by-path（兼容接口）
+### 请求参数
+- 同 `run-survey`
+
+### curl 示例
+```bash
+curl -X POST "$BASE_URL/api/cases/run-by-path" \
+  -H "Content-Type: application/json" \
+  -d "{
+    \"sample_dir\": \"$SAMPLE_DIR\",
+    \"sample_code\": \"FDSW250019884-2a\",
+    \"verbose\": false
+  }"
+```
+
+## 执行类接口返回说明（run-kmer/run-nt/run-survey/run-by-path）
+- `run-kmer` 依赖 `file_check.kmer_complete=true`。
+- `run-nt` 依赖 `file_check.nt_complete=true`。
+- `run-survey/run-by-path` 依赖 `file_check.complete=true`。
+- 条件不满足时：`executed=false`，仅返回缺失项。
+- `executed=true`：该接口对应步骤执行成功并已入库。
+- `case_id`：数据库中的样本主键，可用于后续 `GET /api/cases/{case_id}` 查询。
+
+### run-survey 响应示例（精简）
+```json
+{
+  "sample_dir": "/path/to/sample",
+  "executed": true,
+  "message": "survey判定完成并已入库",
+  "file_check": {
+    "complete": true
+  },
+  "case_id": 12,
+  "case_detail": {
+    "id": 12,
+    "target_species": "手掌参",
+    "kmer_result": {
+      "pattern": "二倍体",
+      "is_normal": true
+    },
+    "nt_result": {
+      "nt_level": "fail",
+      "nt_score": 2
+    },
+    "survey_result": {
+      "final_level": "重度污染",
+      "should_transfer": "否"
+    }
+  }
+}
+```
 
 ## 目录结构
 ```text
@@ -66,4 +214,3 @@ backend/
 ```bash
 conda run -n zhurui_agent python -m uvicorn backend.app.main:app --reload --port 8000
 ```
-
