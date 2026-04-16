@@ -200,6 +200,20 @@ def save_survey_result(db: Session, case_id: int, payload: schemas.SurveyResultI
     return obj
 
 
+def get_case_by_source_path(db: Session, source_path: str) -> models.SurveyCase | None:
+    stmt = select(models.SurveyCase).where(models.SurveyCase.source_path == source_path)
+    return db.execute(stmt).scalar_one_or_none()
+
+
+def delete_case(db: Session, case_id: int) -> bool:
+    obj = db.execute(select(models.SurveyCase).where(models.SurveyCase.id == case_id)).scalar_one_or_none()
+    if obj is None:
+        return False
+    db.delete(obj)
+    db.commit()
+    return True
+
+
 def list_cases(
     db: Session,
     limit: int = 20,

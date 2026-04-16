@@ -68,12 +68,6 @@ class CaseCreate(BaseModel):
     survey_result: SurveyResultIn | None = None
 
 
-class SurveyJsonImportIn(BaseModel):
-    sample_code: str | None = None
-    source_path: str | None = None
-    payload: dict[str, Any]
-
-
 class KmerResultOut(BaseModel):
     pattern: str | None = None
     is_normal: bool | None = None
@@ -189,3 +183,16 @@ class RunStepByPathOut(BaseModel):
     file_check: FileCheckOut
     case_id: int | None = None
     case_detail: CaseDetailOut | None = None
+
+
+class DeleteCaseOut(BaseModel):
+    deleted: bool
+    case_id: int
+    message: str
+
+
+class RerunSurveyIn(BaseModel):
+    sample_dir: str
+    sample_code: str | None = None
+    verbose: bool = True
+    confirm: bool = False

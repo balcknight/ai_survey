@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 
@@ -15,6 +17,22 @@ from ..services.survey_runner import (
 )
 
 router = APIRouter(prefix="/api/cases", tags=["cases"])
+
+
+def _normalize_sample_dir(sample_dir: str) -> str:
+    return str(Path(sample_dir).expanduser().resolve())
+
+
+def _guard_duplicate_source_path(db: Session, source_path: str, case_id: int | None = None):
+    existing = crud.get_case_by_source_path(db, source_path)
+    if existing is None:
+        return
+    if case_id is not None and existing.id == case_id:
+        return
+    raise HTTPException(
+        status_code=409,
+        detail=f"该路径已存在记录(case_id={existing.id})，请先删除后再执行判定",
+    )
 
 
 def _to_kmer_input(kmer_result: dict) -> schemas.KmerResultIn:
@@ -59,33 +77,6 @@ def _to_survey_input(survey_result: dict) -> schemas.SurveyResultIn:
     )
 
 
-@router.post("", response_model=schemas.CaseDetailOut)
-def create_case(payload: schemas.CaseCreate, db: Session = Depends(get_db)):
-    obj = crud.create_case(db, payload)
-    obj = crud.get_case_detail(db, obj.id)
-    if obj is None:
-        raise HTTPException(status_code=500, detail="创建后读取失败")
-    return crud.to_case_detail_out(obj)
-
-
-@router.post("/import-survey-json", response_model=schemas.CaseDetailOut)
-def import_case(payload: schemas.SurveyJsonImportIn, db: Session = Depends(get_db)):
-    try:
-        obj = crud.import_case_from_survey_json(
-            db=db,
-            sample_code=payload.sample_code,
-            source_path=payload.source_path,
-            payload=payload.payload,
-        )
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-
-    obj = crud.get_case_detail(db, obj.id)
-    if obj is None:
-        raise HTTPException(status_code=500, detail="导入后读取失败")
-    return crud.to_case_detail_out(obj)
-
-
 @router.get("", response_model=list[schemas.CaseSummaryOut])
 def list_cases(
     db: Session = Depends(get_db),
@@ -118,10 +109,12 @@ def get_case_detail(case_id: int, db: Session = Depends(get_db)):
 
 @router.post("/run-by-path", response_model=schemas.RunByPathOut)
 def run_by_path(payload: schemas.RunByPathIn, db: Session = Depends(get_db)):
-    file_check = check_required_files(payload.sample_dir)
+    normalized_dir = _normalize_sample_dir(payload.sample_dir)
+    _guard_duplicate_source_path(db, normalized_dir, case_id=None)
+    file_check = check_required_files(normalized_dir)
     if not file_check.complete:
         return schemas.RunByPathOut(
-            sample_dir=payload.sample_dir,
+            sample_dir=normalized_dir,
             file_check=file_check,
             executed=False,
             message=f"输入文件不完整，缺失: {', '.join(file_check.missing)}",
@@ -132,7 +125,7 @@ def run_by_path(payload: schemas.RunByPathIn, db: Session = Depends(get_db)):
         obj = crud.import_case_from_survey_json(
             db=db,
             sample_code=payload.sample_code,
-            source_path=payload.sample_dir,
+            source_path=normalized_dir,
             payload=merged,
         )
         detail_obj = crud.get_case_detail(db, obj.id)
@@ -143,7 +136,7 @@ def run_by_path(payload: schemas.RunByPathIn, db: Session = Depends(get_db)):
         raise HTTPException(status_code=500, detail="执行后读取样本失败")
 
     return schemas.RunByPathOut(
-        sample_dir=payload.sample_dir,
+        sample_dir=normalized_dir,
         file_check=file_check,
         executed=True,
         message="文件齐全，已完成survey判定并入库",
@@ -154,13 +147,14 @@ def run_by_path(payload: schemas.RunByPathIn, db: Session = Depends(get_db)):
 
 @router.post("/check-by-path", response_model=schemas.CheckByPathOut)
 def check_by_path(payload: schemas.CheckByPathIn):
-    file_check = check_required_files(payload.sample_dir)
+    normalized_dir = _normalize_sample_dir(payload.sample_dir)
+    file_check = check_required_files(normalized_dir)
     if file_check.complete:
         message = "文件齐全，可执行完整 survey 判定"
     else:
         message = f"文件不完整，缺失: {', '.join(file_check.missing)}"
     return schemas.CheckByPathOut(
-        sample_dir=payload.sample_dir,
+        sample_dir=normalized_dir,
         file_check=file_check,
         message=message,
     )
@@ -168,10 +162,12 @@ def check_by_path(payload: schemas.CheckByPathIn):
 
 @router.post("/run-kmer", response_model=schemas.RunStepByPathOut)
 def run_kmer(payload: schemas.RunStepByPathIn, db: Session = Depends(get_db)):
-    file_check = check_required_files(payload.sample_dir)
+    normalized_dir = _normalize_sample_dir(payload.sample_dir)
+    _guard_duplicate_source_path(db, normalized_dir, case_id=payload.case_id)
+    file_check = check_required_files(normalized_dir)
     if not file_check.kmer_complete:
         return schemas.RunStepByPathOut(
-            sample_dir=payload.sample_dir,
+            sample_dir=normalized_dir,
             executed=False,
             message=f"kmer输入文件不完整，缺失: {', '.join(file_check.missing)}",
             file_check=file_check,
@@ -184,7 +180,7 @@ def run_kmer(payload: schemas.RunStepByPathIn, db: Session = Depends(get_db)):
             db=db,
             target_species=target_species,
             sample_code=payload.sample_code,
-            source_path=payload.sample_dir,
+            source_path=normalized_dir,
             case_id=payload.case_id,
         )
         crud.save_kmer_result(db, obj.id, _to_kmer_input(kmer_result))
@@ -197,7 +193,7 @@ def run_kmer(payload: schemas.RunStepByPathIn, db: Session = Depends(get_db)):
     if detail_obj is None:
         raise HTTPException(status_code=500, detail="执行后读取样本失败")
     return schemas.RunStepByPathOut(
-        sample_dir=payload.sample_dir,
+        sample_dir=normalized_dir,
         executed=True,
         message="kmer判定完成并已入库",
         file_check=file_check,
@@ -208,10 +204,12 @@ def run_kmer(payload: schemas.RunStepByPathIn, db: Session = Depends(get_db)):
 
 @router.post("/run-nt", response_model=schemas.RunStepByPathOut)
 def run_nt(payload: schemas.RunStepByPathIn, db: Session = Depends(get_db)):
-    file_check = check_required_files(payload.sample_dir)
+    normalized_dir = _normalize_sample_dir(payload.sample_dir)
+    _guard_duplicate_source_path(db, normalized_dir, case_id=payload.case_id)
+    file_check = check_required_files(normalized_dir)
     if not file_check.nt_complete:
         return schemas.RunStepByPathOut(
-            sample_dir=payload.sample_dir,
+            sample_dir=normalized_dir,
             executed=False,
             message=f"NT输入文件不完整，缺失: {', '.join(file_check.missing)}",
             file_check=file_check,
@@ -223,7 +221,7 @@ def run_nt(payload: schemas.RunStepByPathIn, db: Session = Depends(get_db)):
             db=db,
             target_species=target_species,
             sample_code=payload.sample_code,
-            source_path=payload.sample_dir,
+            source_path=normalized_dir,
             case_id=payload.case_id,
         )
         crud.save_nt_result(db, obj.id, _to_nt_input(nt_result))
@@ -236,7 +234,7 @@ def run_nt(payload: schemas.RunStepByPathIn, db: Session = Depends(get_db)):
     if detail_obj is None:
         raise HTTPException(status_code=500, detail="执行后读取样本失败")
     return schemas.RunStepByPathOut(
-        sample_dir=payload.sample_dir,
+        sample_dir=normalized_dir,
         executed=True,
         message="NT判定完成并已入库",
         file_check=file_check,
@@ -247,10 +245,12 @@ def run_nt(payload: schemas.RunStepByPathIn, db: Session = Depends(get_db)):
 
 @router.post("/run-survey", response_model=schemas.RunStepByPathOut)
 def run_survey(payload: schemas.RunStepByPathIn, db: Session = Depends(get_db)):
-    file_check = check_required_files(payload.sample_dir)
+    normalized_dir = _normalize_sample_dir(payload.sample_dir)
+    _guard_duplicate_source_path(db, normalized_dir, case_id=payload.case_id)
+    file_check = check_required_files(normalized_dir)
     if not file_check.complete:
         return schemas.RunStepByPathOut(
-            sample_dir=payload.sample_dir,
+            sample_dir=normalized_dir,
             executed=False,
             message=f"survey输入文件不完整，缺失: {', '.join(file_check.missing)}",
             file_check=file_check,
@@ -265,7 +265,7 @@ def run_survey(payload: schemas.RunStepByPathIn, db: Session = Depends(get_db)):
             db=db,
             target_species=target_species,
             sample_code=payload.sample_code,
-            source_path=payload.sample_dir,
+            source_path=normalized_dir,
             case_id=payload.case_id,
         )
         crud.save_kmer_result(db, obj.id, _to_kmer_input(kmer_result))
@@ -280,10 +280,76 @@ def run_survey(payload: schemas.RunStepByPathIn, db: Session = Depends(get_db)):
     if detail_obj is None:
         raise HTTPException(status_code=500, detail="执行后读取样本失败")
     return schemas.RunStepByPathOut(
-        sample_dir=payload.sample_dir,
+        sample_dir=normalized_dir,
         executed=True,
         message="survey判定完成并已入库",
         file_check=file_check,
         case_id=detail_obj.id,
         case_detail=crud.to_case_detail_out(detail_obj),
+    )
+
+
+@router.post("/rerun-survey", response_model=schemas.RunStepByPathOut)
+def rerun_survey(payload: schemas.RerunSurveyIn, db: Session = Depends(get_db)):
+    if not payload.confirm:
+        raise HTTPException(status_code=400, detail="请显式确认：confirm=true 后才能覆盖重跑")
+
+    normalized_dir = _normalize_sample_dir(payload.sample_dir)
+    existing = crud.get_case_by_source_path(db, normalized_dir)
+    if existing is None:
+        raise HTTPException(status_code=404, detail="该路径暂无历史记录，无法重跑；请先执行 run-survey")
+
+    file_check = check_required_files(normalized_dir)
+    if not file_check.complete:
+        return schemas.RunStepByPathOut(
+            sample_dir=normalized_dir,
+            executed=False,
+            message=f"survey输入文件不完整，缺失: {', '.join(file_check.missing)}",
+            file_check=file_check,
+            case_id=existing.id,
+            case_detail=crud.to_case_detail_out(existing),
+        )
+
+    try:
+        kmer_result = run_kmer_by_paths(file_check=file_check, verbose=payload.verbose)
+        target_species, nt_result = run_nt_by_paths(file_check=file_check)
+        survey_result = run_survey_from_parts(kmer_result, nt_result)
+
+        obj = crud.ensure_case(
+            db=db,
+            target_species=target_species,
+            sample_code=payload.sample_code,
+            source_path=normalized_dir,
+            case_id=existing.id,
+        )
+        crud.save_kmer_result(db, obj.id, _to_kmer_input(kmer_result))
+        crud.save_nt_result(db, obj.id, _to_nt_input(nt_result))
+        crud.save_survey_result(db, obj.id, _to_survey_input(survey_result))
+        detail_obj = crud.get_case_detail(db, obj.id)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"执行重跑失败: {exc}") from exc
+
+    if detail_obj is None:
+        raise HTTPException(status_code=500, detail="重跑后读取样本失败")
+    return schemas.RunStepByPathOut(
+        sample_dir=normalized_dir,
+        executed=True,
+        message="survey重跑完成，已覆盖原记录",
+        file_check=file_check,
+        case_id=detail_obj.id,
+        case_detail=crud.to_case_detail_out(detail_obj),
+    )
+
+
+@router.delete("/{case_id}", response_model=schemas.DeleteCaseOut)
+def delete_case(case_id: int, db: Session = Depends(get_db)):
+    deleted = crud.delete_case(db, case_id)
+    if not deleted:
+        raise HTTPException(status_code=404, detail="样本不存在")
+    return schemas.DeleteCaseOut(
+        deleted=True,
+        case_id=case_id,
+        message="样本记录已删除",
     )

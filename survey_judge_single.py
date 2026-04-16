@@ -20,7 +20,7 @@ def _find_in_sample_dir(sample_path: Path, pattern: str) -> Path | None:
 
 
 def resolve_input_files(sample_dir: str) -> dict[str, str]:
-    """输入样本目录，仅在该目录内自动定位 4 个输入文件路径。"""
+    """输入样本目录，仅在该目录内自动定位 5 个输入文件路径。"""
     sample_path = Path(sample_dir).expanduser().resolve()
     if not sample_path.exists() or not sample_path.is_dir():
         raise FileNotFoundError(f'样本目录不存在或不是目录: {sample_path}')
@@ -29,6 +29,7 @@ def resolve_input_files(sample_dir: str) -> dict[str, str]:
     num_file = _find_in_sample_dir(sample_path, '*.NumFreq.cut')
     ntcls_file = _find_in_sample_dir(sample_path, 'all.ntcls.xls')
     ntspe_file = _find_in_sample_dir(sample_path, 'all.ntspe.xls')
+    result_file = _find_in_sample_dir(sample_path, '*.Result.xls')
 
     missing = []
     if spe_file is None:
@@ -39,11 +40,13 @@ def resolve_input_files(sample_dir: str) -> dict[str, str]:
         missing.append('all.ntcls.xls')
     if ntspe_file is None:
         missing.append('all.ntspe.xls')
+    if result_file is None:
+        missing.append('*.Result.xls')
 
     if missing:
         raise FileNotFoundError(
             f'在目录 {sample_path} 内未找到以下文件: {", ".join(missing)}。'
-            '请确认 4 个输入文件都在该目录（或其子目录）中。'
+            '请确认输入文件都在该目录（或其子目录）中。'
         )
 
     return {
@@ -51,6 +54,7 @@ def resolve_input_files(sample_dir: str) -> dict[str, str]:
         'num_path': str(num_file),
         'ntcls_path': str(ntcls_file),
         'ntspe_path': str(ntspe_file),
+        'result_path': str(result_file),
     }
 
 
@@ -58,6 +62,74 @@ def load_target_species(ntcls_path: str) -> str:
     """从 all.ntcls.xls 第一行读取目标物种名。"""
     df_cls = pd.read_csv(ntcls_path, sep='\t')
     return str(df_cls.iloc[0]['Sample name'])
+
+
+def _ploidy_multiplier(pattern: str) -> int | None:
+    mapping = {
+        '二倍体': 1,
+        '三倍体': 3,
+        '四倍体': 4,
+    }
+    return mapping.get(pattern)
+
+
+def load_and_adjust_result_metrics(result_path: str, pattern: str) -> dict:
+    """读取 *.Result.xls 并按倍性规则修正基因组大小字段。"""
+    required_cols = [
+        '#Sample',
+        'Kmer',
+        'Depth',
+        'n_kmer',
+        'Genome_size(M)',
+        'Revised_Genome_size(M)',
+        'Heterozygous_rate(%)',
+        'Repeat_rate(%)',
+    ]
+    df = pd.read_csv(result_path, sep='\t')
+    if df.empty:
+        raise ValueError(f'Result 文件为空: {result_path}')
+
+    missing_cols = [c for c in required_cols if c not in df.columns]
+    if missing_cols:
+        raise ValueError(
+            f'Result 文件缺少字段: {", ".join(missing_cols)}; 文件: {result_path}'
+        )
+
+    row = df.iloc[0]
+    multiplier = _ploidy_multiplier(pattern)
+
+    raw_info = {
+        'sample_name': str(row['#Sample']),
+        'kmer': int(row['Kmer']),
+        'depth': int(row['Depth']),
+        'n_kmer': int(row['n_kmer']),
+        'genome_size_m': float(row['Genome_size(M)']),
+        'revised_genome_size_m': float(row['Revised_Genome_size(M)']),
+        'heterozygous_rate_percent': float(row['Heterozygous_rate(%)']),
+        'repeat_rate_percent': float(row['Repeat_rate(%)']),
+    }
+
+    adjusted = dict(raw_info)
+    remark = '无法识别的倍型，未对 Genome_size(M)/Revised_Genome_size(M) 做倍数修正'
+    if multiplier is not None:
+        adjusted['genome_size_m'] = round(raw_info['genome_size_m'] * multiplier, 2)
+        adjusted['revised_genome_size_m'] = round(raw_info['revised_genome_size_m'] * multiplier, 2)
+        if multiplier == 1:
+            remark = '二倍体，Genome_size(M)/Revised_Genome_size(M) 保持原值'
+        else:
+            remark = (
+                f'{pattern}，按约定将 Genome_size(M)/Revised_Genome_size(M) 乘 {multiplier} '
+                '以换算到该倍体总基因组大小'
+            )
+
+    return {
+        'result_path': result_path,
+        'ploidy_pattern': pattern,
+        'ploidy_multiplier': multiplier,
+        'raw': raw_info,
+        'adjusted': adjusted,
+        'remark': remark,
+    }
 
 
 def build_final_survey(kmer_result: dict, nt_result: dict) -> dict:
@@ -113,6 +185,7 @@ def run_single_survey(
     num_path: str,
     ntcls_path: str,
     ntspe_path: str,
+    result_path: str | None = None,
     verbose: bool = True,
 ) -> dict:
     """执行单样本联合判定（kmer + NT），并返回汇总结果。"""
@@ -127,10 +200,14 @@ def run_single_survey(
     
     nt_result = judge_nt_contamination(ntcls_path, ntspe_path, target_species)
     survey_result = build_final_survey(result, nt_result)
+    result_metrics = None
+    if result_path:
+        result_metrics = load_and_adjust_result_metrics(result_path, result.get('pattern', ''))
 
     result['target_species'] = target_species
     result['nt_result'] = nt_result
     result['survey_result'] = survey_result
+    result['result_metrics'] = result_metrics
 
     return result
 
@@ -146,12 +223,14 @@ def main():
     print(f"  NumFreq.cut: {paths['num_path']}")
     print(f"  all.ntcls.xls: {paths['ntcls_path']}")
     print(f"  all.ntspe.xls: {paths['ntspe_path']}")
+    print(f"  *.Result.xls: {paths['result_path']}")
 
     merged = run_single_survey(
         spe_path=paths['spe_path'],
         num_path=paths['num_path'],
         ntcls_path=paths['ntcls_path'],
         ntspe_path=paths['ntspe_path'],
+        result_path=paths['result_path'],
         verbose=verbose,
     )
 

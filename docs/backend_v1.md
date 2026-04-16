@@ -2,7 +2,7 @@
 
 ## 目标
 - 基于 `SQLite + FastAPI` 实现可用后端，替代 JSON 文件存储。
-- 支撑前端第一版核心页面：列表、详情、手动创建、JSON 导入。
+- 支撑前端第一版核心页面：列表、详情、路径触发判定。
 - `survey_dev.md` 继续只维护判定规则，本文件维护后端实现方案。
 
 ## 数据模型
@@ -43,20 +43,24 @@
 
 ## V1 已实现接口
 - `GET /health`
-- `POST /api/cases` 创建样本（可携带 kmer/nt/survey）
-- `POST /api/cases/import-survey-json` 导入完整 JSON 结果
 - `GET /api/cases` 列表查询（`limit/offset/target_species/final_level/should_transfer/status`）
 - `GET /api/cases/{case_id}` 样本详情
+- `DELETE /api/cases/{case_id}` 删除样本（删除后可重新发起同路径判定）
 - `POST /api/cases/check-by-path` 只检查样本目录文件是否齐全（不执行判定）
 - `POST /api/cases/run-kmer` 输入样本目录，执行 kmer 判定并入库
 - `POST /api/cases/run-nt` 输入样本目录，执行 NT 判定并入库
 - `POST /api/cases/run-survey` 输入样本目录，执行 kmer+nt+综合判定并入库
+- `POST /api/cases/rerun-survey` 显式确认后重跑并覆盖该路径的已有记录
 - `POST /api/cases/run-by-path` 输入样本目录，自动检查 4 个必需文件；若齐全则执行完整 survey 判定并入库
 
 ## 通用测试前缀
 ```bash
-BASE_URL="http://127.0.0.1:8000"
+BASE_URL="http://127.0.0.1:8001"
 SAMPLE_DIR="/data/work/zhurui/survey_rec/data/shenshaoqi_data/survey1/X101SC2507/X101SC25070200-Z01-J002/FDSW250019884-2a_百花山C-嫩茎_1管"
+
+SAMPLE_DIR1="data/shenshaoqi_data_v2/1"
+
+
 ```
 
 ## 1) 检查文件但不执行
@@ -68,7 +72,7 @@ SAMPLE_DIR="/data/work/zhurui/survey_rec/data/shenshaoqi_data/survey1/X101SC2507
 curl -X POST "$BASE_URL/api/cases/check-by-path" \
   -H "Content-Type: application/json" \
   -d "{
-    \"sample_dir\": \"$SAMPLE_DIR\"
+    \"sample_dir\": \"$SAMPLE_DIR1\"
   }"
 ```
 
@@ -159,13 +163,40 @@ curl -X POST "$BASE_URL/api/cases/run-by-path" \
   }"
 ```
 
-## 执行类接口返回说明（run-kmer/run-nt/run-survey/run-by-path）
+## 6) rerun-survey（显式确认覆盖）
+### 请求参数
+- `sample_dir`：样本目录（必须已存在历史记录）
+- `sample_code`：样本编号（可选）
+- `verbose`：是否打印详细日志（默认 `true`）
+- `confirm`：必须为 `true`，否则拒绝执行
+
+### curl 示例
+```bash
+curl -X POST "$BASE_URL/api/cases/rerun-survey" \
+  -H "Content-Type: application/json" \
+  -d "{
+    \"sample_dir\": \"$SAMPLE_DIR\",
+    \"sample_code\": \"FDSW250019884-2a\",
+    \"verbose\": false,
+    \"confirm\": true
+  }"
+```
+
+## 执行类接口返回说明（run-kmer/run-nt/run-survey/run-by-path/rerun-survey）
 - `run-kmer` 依赖 `file_check.kmer_complete=true`。
 - `run-nt` 依赖 `file_check.nt_complete=true`。
 - `run-survey/run-by-path` 依赖 `file_check.complete=true`。
 - 条件不满足时：`executed=false`，仅返回缺失项。
+- `run-kmer/run-nt/run-survey/run-by-path` 都会先检查 `sample_dir` 是否已存在历史记录；若已存在，返回 `409`。
+- `rerun-survey` 用于显式覆盖重跑：`confirm=true` 且路径已存在时才执行。
 - `executed=true`：该接口对应步骤执行成功并已入库。
 - `case_id`：数据库中的样本主键，可用于后续 `GET /api/cases/{case_id}` 查询。
+
+## 删除接口
+### curl 示例
+```bash
+curl -X DELETE "$BASE_URL/api/cases/12"
+```
 
 ### run-survey 响应示例（精简）
 ```json
@@ -212,5 +243,5 @@ backend/
 
 ## 运行方式
 ```bash
-conda run -n zhurui_agent python -m uvicorn backend.app.main:app --reload --port 8000
+conda run -n zhurui_agent python -m uvicorn backend.app.main:app --reload --port 8001
 ```

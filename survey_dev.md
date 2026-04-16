@@ -233,8 +233,14 @@ kmer异常时：
 | target_species | 从 `all.ntcls.xls` 读取的目标物种名 |
 | nt_result | NT判定结果对象：`nt_score/nt_level/ntcls_score/ntspe_score/ntcls_detail/ntspe_detail/ntcls_top1_pass/ntcls_contamination_pass/ntspe_contamination_pass` |
 | survey_result | 综合结果对象：`final_level/should_transfer/remark` |
+| result_metrics | 从 `*.Result.xls` 读取并修正后的结果对象：`result_path/ploidy_pattern/ploidy_multiplier/raw/adjusted/remark` |
 
 说明：单样本 JSON 输出采用嵌套结构，不再写入顶层平铺重复字段（如 `nt_score/nt_level/final_level/should_transfer`）。
+
+补充规则（`*.Result.xls`）：
+1. 文件需包含 8 列，顺序与语义如下：物种名（`#Sample`）、`Kmer`、主峰深度（`Depth`）、`n_kmer`、基因组大小（`Genome_size(M)`）、校正后基因组大小（`Revised_Genome_size(M)`）、杂合率（`Heterozygous_rate(%)`）、重复率（`Repeat_rate(%)`）。
+2. `result_metrics.raw` 直接保存首行原始值；`result_metrics.adjusted` 保存按倍性修正后的值。
+3. 倍性修正规则：二倍体不变；三倍体将 `Genome_size(M)` 和 `Revised_Genome_size(M)` 乘 3；四倍体乘 4；并在 `result_metrics.remark` 记录原因。
 
 
 
