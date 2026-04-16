@@ -41,6 +41,14 @@
 - `rule_version`
 - `raw_json`
 
+### 5. result_metrics（1:1）
+- `case_id`
+- `result_path`
+- `ploidy_pattern` / `ploidy_multiplier`
+- `raw_json`（原始 `*.Result.xls` 首行）
+- `adjusted_json`（按倍型修正后的结果）
+- `remark`
+
 ## V1 已实现接口
 - `GET /health`
 - `GET /api/cases` 列表查询（`limit/offset/target_species/final_level/should_transfer/status`）
@@ -49,9 +57,9 @@
 - `POST /api/cases/check-by-path` 只检查样本目录文件是否齐全（不执行判定）
 - `POST /api/cases/run-kmer` 输入样本目录，执行 kmer 判定并入库
 - `POST /api/cases/run-nt` 输入样本目录，执行 NT 判定并入库
-- `POST /api/cases/run-survey` 输入样本目录，执行 kmer+nt+综合判定并入库
+- `POST /api/cases/run-survey` 输入样本目录，执行 `survey_judge_single.py` 同款完整判定（kmer+nt+survey+result）并入库
 - `POST /api/cases/rerun-survey` 显式确认后重跑并覆盖该路径的已有记录
-- `POST /api/cases/run-by-path` 输入样本目录，自动检查 4 个必需文件；若齐全则执行完整 survey 判定并入库
+- `POST /api/cases/run-by-path` 输入样本目录，自动检查 5 个必需文件；若齐全则执行完整 survey 判定并入库
 
 ## 通用测试前缀
 ```bash
@@ -79,7 +87,7 @@ curl -X POST "$BASE_URL/api/cases/check-by-path" \
 ### 返回关键字段
 - `file_check.kmer_complete`：是否具备 kmer 执行条件（SpeFreq+NumFreq）
 - `file_check.nt_complete`：是否具备 NT 执行条件（ntcls+ntspe）
-- `file_check.complete`：是否具备 survey 执行条件（四文件齐全）
+- `file_check.complete`：是否具备 survey 执行条件（五文件齐全，含 `*.Result.xls`）
 - `file_check.missing`：缺失文件列表
 
 ### 响应示例
@@ -91,6 +99,7 @@ curl -X POST "$BASE_URL/api/cases/check-by-path" \
     "num_path": "/path/to/sample/a.NumFreq.cut",
     "ntcls_path": "/path/to/sample/all.ntcls.xls",
     "ntspe_path": "/path/to/sample/all.ntspe.xls",
+    "result_path": "/path/to/sample/a.Result.xls",
     "missing": [],
     "kmer_complete": true,
     "nt_complete": true,
@@ -185,12 +194,13 @@ curl -X POST "$BASE_URL/api/cases/rerun-survey" \
 ## 执行类接口返回说明（run-kmer/run-nt/run-survey/run-by-path/rerun-survey）
 - `run-kmer` 依赖 `file_check.kmer_complete=true`。
 - `run-nt` 依赖 `file_check.nt_complete=true`。
-- `run-survey/run-by-path` 依赖 `file_check.complete=true`。
+- `run-survey/run-by-path` 依赖 `file_check.complete=true`（即同时具备 `*.SpeFreq.cut/*.NumFreq.cut/all.ntcls.xls/all.ntspe.xls/*.Result.xls`）。
 - 条件不满足时：`executed=false`，仅返回缺失项。
 - `run-kmer/run-nt/run-survey/run-by-path` 都会先检查 `sample_dir` 是否已存在历史记录；若已存在，返回 `409`。
 - `rerun-survey` 用于显式覆盖重跑：`confirm=true` 且路径已存在时才执行。
 - `executed=true`：该接口对应步骤执行成功并已入库。
 - `case_id`：数据库中的样本主键，可用于后续 `GET /api/cases/{case_id}` 查询。
+- `run-survey/rerun-survey/run-by-path` 的判定入口统一与 `survey_judge_single.py` 对齐：目标物种由 `all.ntcls.xls` 首行 `Sample name` 推导，并同时用于 kmer 与 nt。
 
 ## 删除接口
 ### curl 示例
@@ -222,6 +232,11 @@ curl -X DELETE "$BASE_URL/api/cases/12"
     "survey_result": {
       "final_level": "重度污染",
       "should_transfer": "否"
+    },
+    "result_metrics": {
+      "ploidy_pattern": "三倍体",
+      "ploidy_multiplier": 3,
+      "remark": "三倍体，按约定将 Genome_size(M)/Revised_Genome_size(M) 乘 3 以换算到该倍体总基因组大小"
     }
   }
 }

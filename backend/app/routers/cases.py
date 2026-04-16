@@ -13,7 +13,6 @@ from ..services.survey_runner import (
     run_kmer_by_paths,
     run_nt_by_paths,
     run_survey_by_paths,
-    run_survey_from_parts,
 )
 
 router = APIRouter(prefix="/api/cases", tags=["cases"])
@@ -74,6 +73,17 @@ def _to_survey_input(survey_result: dict) -> schemas.SurveyResultIn:
         remark=survey_result.get("remark"),
         rule_version="survey_rule_v1",
         raw_payload=survey_result,
+    )
+
+
+def _to_result_metrics_input(result_metrics: dict) -> schemas.ResultMetricsIn:
+    return schemas.ResultMetricsIn(
+        result_path=result_metrics.get("result_path"),
+        ploidy_pattern=result_metrics.get("ploidy_pattern"),
+        ploidy_multiplier=result_metrics.get("ploidy_multiplier"),
+        raw=result_metrics.get("raw"),
+        adjusted=result_metrics.get("adjusted"),
+        remark=result_metrics.get("remark"),
     )
 
 
@@ -257,9 +267,12 @@ def run_survey(payload: schemas.RunStepByPathIn, db: Session = Depends(get_db)):
         )
 
     try:
-        kmer_result = run_kmer_by_paths(file_check=file_check, verbose=payload.verbose)
-        target_species, nt_result = run_nt_by_paths(file_check=file_check)
-        survey_result = run_survey_from_parts(kmer_result, nt_result)
+        merged = run_survey_by_paths(file_check=file_check, verbose=payload.verbose)
+        kmer_result = merged
+        nt_result = merged.get("nt_result", {})
+        survey_result = merged.get("survey_result", {})
+        result_metrics = merged.get("result_metrics", {})
+        target_species = merged.get("target_species") or infer_target_species(file_check) or "未提供"
 
         obj = crud.ensure_case(
             db=db,
@@ -271,6 +284,8 @@ def run_survey(payload: schemas.RunStepByPathIn, db: Session = Depends(get_db)):
         crud.save_kmer_result(db, obj.id, _to_kmer_input(kmer_result))
         crud.save_nt_result(db, obj.id, _to_nt_input(nt_result))
         crud.save_survey_result(db, obj.id, _to_survey_input(survey_result))
+        if result_metrics:
+            crud.save_result_metrics(db, obj.id, _to_result_metrics_input(result_metrics))
         detail_obj = crud.get_case_detail(db, obj.id)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -311,9 +326,12 @@ def rerun_survey(payload: schemas.RerunSurveyIn, db: Session = Depends(get_db)):
         )
 
     try:
-        kmer_result = run_kmer_by_paths(file_check=file_check, verbose=payload.verbose)
-        target_species, nt_result = run_nt_by_paths(file_check=file_check)
-        survey_result = run_survey_from_parts(kmer_result, nt_result)
+        merged = run_survey_by_paths(file_check=file_check, verbose=payload.verbose)
+        kmer_result = merged
+        nt_result = merged.get("nt_result", {})
+        survey_result = merged.get("survey_result", {})
+        result_metrics = merged.get("result_metrics", {})
+        target_species = merged.get("target_species") or infer_target_species(file_check) or "未提供"
 
         obj = crud.ensure_case(
             db=db,
@@ -325,6 +343,8 @@ def rerun_survey(payload: schemas.RerunSurveyIn, db: Session = Depends(get_db)):
         crud.save_kmer_result(db, obj.id, _to_kmer_input(kmer_result))
         crud.save_nt_result(db, obj.id, _to_nt_input(nt_result))
         crud.save_survey_result(db, obj.id, _to_survey_input(survey_result))
+        if result_metrics:
+            crud.save_result_metrics(db, obj.id, _to_result_metrics_input(result_metrics))
         detail_obj = crud.get_case_detail(db, obj.id)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc

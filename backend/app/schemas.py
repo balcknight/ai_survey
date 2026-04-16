@@ -57,6 +57,15 @@ class SurveyResultIn(BaseModel):
     raw_payload: dict[str, Any] | None = None
 
 
+class ResultMetricsIn(BaseModel):
+    result_path: str | None = None
+    ploidy_pattern: str | None = None
+    ploidy_multiplier: int | None = None
+    raw: dict[str, Any] | None = None
+    adjusted: dict[str, Any] | None = None
+    remark: str | None = None
+
+
 class CaseCreate(BaseModel):
     sample_code: str | None = None
     target_species: str
@@ -66,6 +75,7 @@ class CaseCreate(BaseModel):
     kmer_result: KmerResultIn | None = None
     nt_result: NtResultIn | None = None
     survey_result: SurveyResultIn | None = None
+    result_metrics: ResultMetricsIn | None = None
 
 
 class KmerResultOut(BaseModel):
@@ -103,6 +113,17 @@ class SurveyResultOut(BaseModel):
     updated_at: datetime | None = None
 
 
+class ResultMetricsOut(BaseModel):
+    result_path: str | None = None
+    ploidy_pattern: str | None = None
+    ploidy_multiplier: int | None = None
+    raw: dict[str, Any] | None = None
+    adjusted: dict[str, Any] | None = None
+    remark: str | None = None
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
+
+
 class CaseSummaryOut(BaseModel):
     id: int
     sample_code: str | None = None
@@ -131,6 +152,7 @@ class CaseDetailOut(BaseModel):
     kmer_result: KmerResultOut | None = None
     nt_result: NtResultOut | None = None
     survey_result: SurveyResultOut | None = None
+    result_metrics: ResultMetricsOut | None = None
 
 
 class FileCheckOut(BaseModel):
@@ -138,6 +160,7 @@ class FileCheckOut(BaseModel):
     num_path: str | None = None
     ntcls_path: str | None = None
     ntspe_path: str | None = None
+    result_path: str | None = None
     missing: list[str] = Field(default_factory=list)
     kmer_complete: bool = False
     nt_complete: bool = False

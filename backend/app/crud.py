@@ -61,6 +61,27 @@ def _upsert_survey(db: Session, case_id: int, payload: schemas.SurveyResultIn) -
     return obj
 
 
+def _upsert_result_metrics(
+    db: Session,
+    case_id: int,
+    payload: schemas.ResultMetricsIn,
+) -> models.ResultMetrics:
+    obj = db.execute(
+        select(models.ResultMetrics).where(models.ResultMetrics.case_id == case_id)
+    ).scalar_one_or_none()
+    if obj is None:
+        obj = models.ResultMetrics(case_id=case_id)
+        db.add(obj)
+
+    obj.result_path = payload.result_path
+    obj.ploidy_pattern = payload.ploidy_pattern
+    obj.ploidy_multiplier = payload.ploidy_multiplier
+    obj.raw_json = to_json_text(payload.raw)
+    obj.adjusted_json = to_json_text(payload.adjusted)
+    obj.remark = payload.remark
+    return obj
+
+
 def create_case(db: Session, payload: schemas.CaseCreate) -> models.SurveyCase:
     obj = models.SurveyCase(
         sample_code=payload.sample_code,
@@ -84,6 +105,8 @@ def create_case(db: Session, payload: schemas.CaseCreate) -> models.SurveyCase:
         obj.should_transfer = survey.should_transfer
         obj.remark = survey.remark
         obj.status = "judged"
+    if payload.result_metrics:
+        _upsert_result_metrics(db, obj.id, payload.result_metrics)
 
     db.commit()
     db.refresh(obj)
@@ -123,6 +146,11 @@ def import_case_from_survey_json(
         survey_result=(
             schemas.SurveyResultIn(**payload.get("survey_result", {}))
             if payload.get("survey_result")
+            else None
+        ),
+        result_metrics=(
+            schemas.ResultMetricsIn(**payload.get("result_metrics", {}))
+            if payload.get("result_metrics")
             else None
         ),
     )
@@ -200,6 +228,16 @@ def save_survey_result(db: Session, case_id: int, payload: schemas.SurveyResultI
     return obj
 
 
+def save_result_metrics(db: Session, case_id: int, payload: schemas.ResultMetricsIn) -> models.SurveyCase:
+    obj = db.execute(select(models.SurveyCase).where(models.SurveyCase.id == case_id)).scalar_one_or_none()
+    if obj is None:
+        raise ValueError(f"case_id={case_id} 不存在")
+    _upsert_result_metrics(db, case_id, payload)
+    db.commit()
+    db.refresh(obj)
+    return obj
+
+
 def get_case_by_source_path(db: Session, source_path: str) -> models.SurveyCase | None:
     stmt = select(models.SurveyCase).where(models.SurveyCase.source_path == source_path)
     return db.execute(stmt).scalar_one_or_none()
@@ -249,6 +287,7 @@ def get_case_detail(db: Session, case_id: int) -> models.SurveyCase | None:
             joinedload(models.SurveyCase.kmer_result),
             joinedload(models.SurveyCase.nt_result),
             joinedload(models.SurveyCase.survey_result),
+            joinedload(models.SurveyCase.result_metrics),
         )
     )
     return db.execute(stmt).scalar_one_or_none()
@@ -274,6 +313,7 @@ def to_case_detail_out(obj: models.SurveyCase) -> schemas.CaseDetailOut:
     kmer_out = None
     nt_out = None
     survey_out = None
+    result_metrics_out = None
 
     if obj.kmer_result:
         kmer_out = schemas.KmerResultOut(
@@ -318,6 +358,17 @@ def to_case_detail_out(obj: models.SurveyCase) -> schemas.CaseDetailOut:
             created_at=obj.survey_result.created_at,
             updated_at=obj.survey_result.updated_at,
         )
+    if obj.result_metrics:
+        result_metrics_out = schemas.ResultMetricsOut(
+            result_path=obj.result_metrics.result_path,
+            ploidy_pattern=obj.result_metrics.ploidy_pattern,
+            ploidy_multiplier=obj.result_metrics.ploidy_multiplier,
+            raw=from_json_text(obj.result_metrics.raw_json, None),
+            adjusted=from_json_text(obj.result_metrics.adjusted_json, None),
+            remark=obj.result_metrics.remark,
+            created_at=obj.result_metrics.created_at,
+            updated_at=obj.result_metrics.updated_at,
+        )
 
     return schemas.CaseDetailOut(
         id=obj.id,
@@ -333,4 +384,5 @@ def to_case_detail_out(obj: models.SurveyCase) -> schemas.CaseDetailOut:
         kmer_result=kmer_out,
         nt_result=nt_out,
         survey_result=survey_out,
+        result_metrics=result_metrics_out,
     )

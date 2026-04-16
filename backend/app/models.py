@@ -36,6 +36,9 @@ class SurveyCase(Base):
     survey_result: Mapped[SurveyResult | None] = relationship(
         "SurveyResult", back_populates="case", uselist=False, cascade="all, delete-orphan"
     )
+    result_metrics: Mapped[ResultMetrics | None] = relationship(
+        "ResultMetrics", back_populates="case", uselist=False, cascade="all, delete-orphan"
+    )
 
 
 class KmerResult(Base):
@@ -110,3 +113,24 @@ class SurveyResult(Base):
 
     case: Mapped[SurveyCase] = relationship("SurveyCase", back_populates="survey_result")
 
+
+class ResultMetrics(Base):
+    __tablename__ = "result_metrics"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    case_id: Mapped[int] = mapped_column(ForeignKey("survey_cases.id"), unique=True, index=True)
+    result_path: Mapped[str | None] = mapped_column(Text, nullable=True)
+    ploidy_pattern: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    ploidy_multiplier: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
+    raw_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    adjusted_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    remark: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime,
+        default=datetime.utcnow,
+        onupdate=datetime.utcnow,
+        nullable=False,
+    )
+
+    case: Mapped[SurveyCase] = relationship("SurveyCase", back_populates="result_metrics")

@@ -5,7 +5,7 @@ from pathlib import Path
 from kmer_judge import main_dual
 from nt_judge import judge_nt_contamination
 from survey_judge_single import run_single_survey
-from survey_judge_single import build_final_survey, load_target_species
+from survey_judge_single import load_target_species
 
 from .. import schemas
 
@@ -31,6 +31,7 @@ def check_required_files(sample_dir: str) -> schemas.FileCheckOut:
     num_file = _find_first(sample_path, "*.NumFreq.cut")
     ntcls_file = _find_first(sample_path, "all.ntcls.xls")
     ntspe_file = _find_first(sample_path, "all.ntspe.xls")
+    result_file = _find_first(sample_path, "*.Result.xls")
 
     missing: list[str] = []
     if spe_file is None:
@@ -41,12 +42,15 @@ def check_required_files(sample_dir: str) -> schemas.FileCheckOut:
         missing.append("all.ntcls.xls")
     if ntspe_file is None:
         missing.append("all.ntspe.xls")
+    if result_file is None:
+        missing.append("*.Result.xls")
 
     return schemas.FileCheckOut(
         spe_path=str(spe_file) if spe_file else None,
         num_path=str(num_file) if num_file else None,
         ntcls_path=str(ntcls_file) if ntcls_file else None,
         ntspe_path=str(ntspe_file) if ntspe_file else None,
+        result_path=str(result_file) if result_file else None,
         missing=missing,
         kmer_complete=(spe_file is not None and num_file is not None),
         nt_complete=(ntcls_file is not None and ntspe_file is not None),
@@ -87,10 +91,6 @@ def run_nt_by_paths(file_check: schemas.FileCheckOut) -> tuple[str, dict]:
     return target_species, nt_result
 
 
-def run_survey_from_parts(kmer_result: dict, nt_result: dict) -> dict:
-    return build_final_survey(kmer_result, nt_result)
-
-
 def run_survey_by_paths(file_check: schemas.FileCheckOut, verbose: bool = True) -> dict:
     if not file_check.complete:
         raise ValueError("输入文件不完整，不能执行判定")
@@ -99,5 +99,6 @@ def run_survey_by_paths(file_check: schemas.FileCheckOut, verbose: bool = True) 
         num_path=file_check.num_path or "",
         ntcls_path=file_check.ntcls_path or "",
         ntspe_path=file_check.ntspe_path or "",
+        result_path=file_check.result_path or "",
         verbose=verbose,
     )
