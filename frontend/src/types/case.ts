@@ -38,6 +38,10 @@ export interface CaseDetail extends Omit<CaseSummary, 'kmer_pattern' | 'kmer_is_
     num_peaks: PeaksData | null
     warnings: string[]
     analysis_ploidy: Record<string, unknown> | null
+    spe_plot_path: string | null
+    num_plot_path: string | null
+    created_at?: string | null
+    updated_at?: string | null
   } | null
   nt_result: {
     nt_score: number | null

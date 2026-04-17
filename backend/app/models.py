@@ -55,6 +55,8 @@ class KmerResult(Base):
     detail: Mapped[str | None] = mapped_column(Text, nullable=True)
     warnings_json: Mapped[str | None] = mapped_column(Text, nullable=True)
     analysis_ploidy_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    spe_plot_path: Mapped[str | None] = mapped_column(Text, nullable=True)
+    num_plot_path: Mapped[str | None] = mapped_column(Text, nullable=True)
     raw_json: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(

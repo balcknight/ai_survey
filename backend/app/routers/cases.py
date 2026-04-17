@@ -3,10 +3,12 @@ from __future__ import annotations
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
 
 from .. import crud, schemas
 from ..db import get_db
+from ..services.kmer_plot import KMER_PLOT_ROOT, cleanup_kmer_plots, generate_kmer_plots
 from ..services.survey_runner import (
     check_required_files,
     infer_target_species,
@@ -20,6 +22,17 @@ router = APIRouter(prefix="/api/cases", tags=["cases"])
 
 def _normalize_sample_dir(sample_dir: str) -> str:
     return str(Path(sample_dir).expanduser().resolve())
+
+
+def _resolve_sample_code(sample_code: str | None, normalized_dir: str) -> str | None:
+    if sample_code is not None:
+        cleaned = sample_code.strip()
+        if cleaned:
+            return cleaned
+
+    # 未传 sample_code 时，默认使用样本目录名作为样本编号。
+    inferred = Path(normalized_dir).name.strip()
+    return inferred or None
 
 
 def _guard_duplicate_source_path(db: Session, source_path: str, case_id: int | None = None):
@@ -47,8 +60,24 @@ def _to_kmer_input(kmer_result: dict) -> schemas.KmerResultIn:
             if kmer_result.get("analysis_ploidy")
             else None
         ),
+        spe_plot_path=kmer_result.get("spe_plot_path"),
+        num_plot_path=kmer_result.get("num_plot_path"),
         raw_payload=kmer_result,
     )
+
+
+def _attach_kmer_plots(kmer_result: dict, file_check: schemas.FileCheckOut, sample_dir: str) -> dict:
+    plot_result = generate_kmer_plots(
+        spe_path=file_check.spe_path,
+        num_path=file_check.num_path,
+        sample_dir=sample_dir,
+    )
+    merged = dict(kmer_result)
+    merged["spe_plot_path"] = plot_result.get("spe_plot_path")
+    merged["num_plot_path"] = plot_result.get("num_plot_path")
+    existing_warnings = list(merged.get("warnings") or [])
+    merged["warnings"] = existing_warnings + list(plot_result.get("warnings", []))
+    return merged
 
 
 def _to_nt_input(nt_result: dict) -> schemas.NtResultIn:
@@ -117,9 +146,37 @@ def get_case_detail(case_id: int, db: Session = Depends(get_db)):
     return crud.to_case_detail_out(obj)
 
 
+@router.get("/{case_id}/kmer-plot")
+def get_kmer_plot(
+    case_id: int,
+    spectrum: str = Query(..., pattern="^(spe|num)$"),
+    db: Session = Depends(get_db),
+):
+    obj = crud.get_case_detail(db, case_id)
+    if obj is None:
+        raise HTTPException(status_code=404, detail="样本不存在")
+    if obj.kmer_result is None:
+        raise HTTPException(status_code=404, detail="该样本暂无kmer结果")
+
+    plot_path = obj.kmer_result.spe_plot_path if spectrum == "spe" else obj.kmer_result.num_plot_path
+    if not plot_path:
+        raise HTTPException(status_code=404, detail=f"该样本暂无{spectrum}峰图")
+
+    path = Path(plot_path).expanduser().resolve()
+    if not path.exists() or not path.is_file():
+        raise HTTPException(status_code=404, detail="峰图文件不存在")
+    try:
+        path.relative_to(KMER_PLOT_ROOT)
+    except ValueError as exc:
+        raise HTTPException(status_code=403, detail="峰图路径不在受管目录，拒绝访问") from exc
+
+    return FileResponse(str(path), media_type="image/png", filename=path.name)
+
+
 @router.post("/run-by-path", response_model=schemas.RunByPathOut)
 def run_by_path(payload: schemas.RunByPathIn, db: Session = Depends(get_db)):
     normalized_dir = _normalize_sample_dir(payload.sample_dir)
+    resolved_sample_code = _resolve_sample_code(payload.sample_code, normalized_dir)
     _guard_duplicate_source_path(db, normalized_dir, case_id=None)
     file_check = check_required_files(normalized_dir)
     if not file_check.complete:
@@ -132,9 +189,10 @@ def run_by_path(payload: schemas.RunByPathIn, db: Session = Depends(get_db)):
 
     try:
         merged = run_survey_by_paths(file_check=file_check, verbose=payload.verbose)
+        merged = _attach_kmer_plots(merged, file_check, normalized_dir)
         obj = crud.import_case_from_survey_json(
             db=db,
-            sample_code=payload.sample_code,
+            sample_code=resolved_sample_code,
             source_path=normalized_dir,
             payload=merged,
         )
@@ -173,6 +231,7 @@ def check_by_path(payload: schemas.CheckByPathIn):
 @router.post("/run-kmer", response_model=schemas.RunStepByPathOut)
 def run_kmer(payload: schemas.RunStepByPathIn, db: Session = Depends(get_db)):
     normalized_dir = _normalize_sample_dir(payload.sample_dir)
+    resolved_sample_code = _resolve_sample_code(payload.sample_code, normalized_dir)
     _guard_duplicate_source_path(db, normalized_dir, case_id=payload.case_id)
     file_check = check_required_files(normalized_dir)
     if not file_check.kmer_complete:
@@ -185,11 +244,12 @@ def run_kmer(payload: schemas.RunStepByPathIn, db: Session = Depends(get_db)):
 
     try:
         kmer_result = run_kmer_by_paths(file_check=file_check, verbose=payload.verbose)
+        kmer_result = _attach_kmer_plots(kmer_result, file_check, normalized_dir)
         target_species = infer_target_species(file_check) or "未提供"
         obj = crud.ensure_case(
             db=db,
             target_species=target_species,
-            sample_code=payload.sample_code,
+            sample_code=resolved_sample_code,
             source_path=normalized_dir,
             case_id=payload.case_id,
         )
@@ -215,6 +275,7 @@ def run_kmer(payload: schemas.RunStepByPathIn, db: Session = Depends(get_db)):
 @router.post("/run-nt", response_model=schemas.RunStepByPathOut)
 def run_nt(payload: schemas.RunStepByPathIn, db: Session = Depends(get_db)):
     normalized_dir = _normalize_sample_dir(payload.sample_dir)
+    resolved_sample_code = _resolve_sample_code(payload.sample_code, normalized_dir)
     _guard_duplicate_source_path(db, normalized_dir, case_id=payload.case_id)
     file_check = check_required_files(normalized_dir)
     if not file_check.nt_complete:
@@ -230,7 +291,7 @@ def run_nt(payload: schemas.RunStepByPathIn, db: Session = Depends(get_db)):
         obj = crud.ensure_case(
             db=db,
             target_species=target_species,
-            sample_code=payload.sample_code,
+            sample_code=resolved_sample_code,
             source_path=normalized_dir,
             case_id=payload.case_id,
         )
@@ -256,6 +317,7 @@ def run_nt(payload: schemas.RunStepByPathIn, db: Session = Depends(get_db)):
 @router.post("/run-survey", response_model=schemas.RunStepByPathOut)
 def run_survey(payload: schemas.RunStepByPathIn, db: Session = Depends(get_db)):
     normalized_dir = _normalize_sample_dir(payload.sample_dir)
+    resolved_sample_code = _resolve_sample_code(payload.sample_code, normalized_dir)
     _guard_duplicate_source_path(db, normalized_dir, case_id=payload.case_id)
     file_check = check_required_files(normalized_dir)
     if not file_check.complete:
@@ -268,7 +330,7 @@ def run_survey(payload: schemas.RunStepByPathIn, db: Session = Depends(get_db)):
 
     try:
         merged = run_survey_by_paths(file_check=file_check, verbose=payload.verbose)
-        kmer_result = merged
+        kmer_result = _attach_kmer_plots(merged, file_check, normalized_dir)
         nt_result = merged.get("nt_result", {})
         survey_result = merged.get("survey_result", {})
         result_metrics = merged.get("result_metrics", {})
@@ -277,7 +339,7 @@ def run_survey(payload: schemas.RunStepByPathIn, db: Session = Depends(get_db)):
         obj = crud.ensure_case(
             db=db,
             target_species=target_species,
-            sample_code=payload.sample_code,
+            sample_code=resolved_sample_code,
             source_path=normalized_dir,
             case_id=payload.case_id,
         )
@@ -310,6 +372,7 @@ def rerun_survey(payload: schemas.RerunSurveyIn, db: Session = Depends(get_db)):
         raise HTTPException(status_code=400, detail="请显式确认：confirm=true 后才能覆盖重跑")
 
     normalized_dir = _normalize_sample_dir(payload.sample_dir)
+    resolved_sample_code = _resolve_sample_code(payload.sample_code, normalized_dir)
     existing = crud.get_case_by_source_path(db, normalized_dir)
     if existing is None:
         raise HTTPException(status_code=404, detail="该路径暂无历史记录，无法重跑；请先执行 run-survey")
@@ -327,7 +390,7 @@ def rerun_survey(payload: schemas.RerunSurveyIn, db: Session = Depends(get_db)):
 
     try:
         merged = run_survey_by_paths(file_check=file_check, verbose=payload.verbose)
-        kmer_result = merged
+        kmer_result = _attach_kmer_plots(merged, file_check, normalized_dir)
         nt_result = merged.get("nt_result", {})
         survey_result = merged.get("survey_result", {})
         result_metrics = merged.get("result_metrics", {})
@@ -336,7 +399,7 @@ def rerun_survey(payload: schemas.RerunSurveyIn, db: Session = Depends(get_db)):
         obj = crud.ensure_case(
             db=db,
             target_species=target_species,
-            sample_code=payload.sample_code,
+            sample_code=resolved_sample_code,
             source_path=normalized_dir,
             case_id=existing.id,
         )
@@ -365,11 +428,25 @@ def rerun_survey(payload: schemas.RerunSurveyIn, db: Session = Depends(get_db)):
 
 @router.delete("/{case_id}", response_model=schemas.DeleteCaseOut)
 def delete_case(case_id: int, db: Session = Depends(get_db)):
-    deleted = crud.delete_case(db, case_id)
-    if not deleted:
+    existing = crud.get_case_detail(db, case_id)
+    if existing is None:
         raise HTTPException(status_code=404, detail="样本不存在")
+
+    cleanup_result = cleanup_kmer_plots(
+        [
+            existing.kmer_result.spe_plot_path if existing.kmer_result else None,
+            existing.kmer_result.num_plot_path if existing.kmer_result else None,
+        ]
+    )
+    crud.delete_case(db, case_id)
+
+    deleted_files = int(cleanup_result.get("deleted_files", 0))
+    ignored_paths = list(cleanup_result.get("ignored_paths", []))
+    message = f"样本记录已删除，已同步清理峰图 {deleted_files} 个文件"
+    if ignored_paths:
+        message += f"（忽略 {len(ignored_paths)} 个非受管路径）"
     return schemas.DeleteCaseOut(
         deleted=True,
         case_id=case_id,
-        message="样本记录已删除",
+        message=message,
     )

@@ -24,6 +24,8 @@ def _upsert_kmer(db: Session, case_id: int, payload: schemas.KmerResultIn) -> mo
     obj.analysis_ploidy_json = to_json_text(
         payload.analysis_ploidy.model_dump() if payload.analysis_ploidy else None
     )
+    obj.spe_plot_path = payload.spe_plot_path
+    obj.num_plot_path = payload.num_plot_path
     obj.raw_json = to_json_text(payload.raw_payload)
     return obj
 
@@ -140,6 +142,8 @@ def import_case_from_survey_json(
                 if payload.get("analysis_ploidy")
                 else None
             ),
+            spe_plot_path=payload.get("spe_plot_path"),
+            num_plot_path=payload.get("num_plot_path"),
             raw_payload=payload,
         ),
         nt_result=schemas.NtResultIn(**payload.get("nt_result", {})) if payload.get("nt_result") else None,
@@ -330,6 +334,8 @@ def to_case_detail_out(obj: models.SurveyCase) -> schemas.CaseDetailOut:
             ),
             warnings=from_json_text(obj.kmer_result.warnings_json, []),
             analysis_ploidy=from_json_text(obj.kmer_result.analysis_ploidy_json, None),
+            spe_plot_path=obj.kmer_result.spe_plot_path,
+            num_plot_path=obj.kmer_result.num_plot_path,
             created_at=obj.kmer_result.created_at,
             updated_at=obj.kmer_result.updated_at,
         )

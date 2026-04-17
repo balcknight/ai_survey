@@ -9,7 +9,7 @@
 
 ### 1. survey_cases（主表）
 - `id` 主键
-- `sample_code` 样本编号
+- `sample_code` 样本编号（可选；未传时默认取 `sample_dir` 最后一级目录名）
 - `target_species` 目标物种
 - `source_path` 来源路径
 - `status`（`created|kmer_done|nt_done|judged|failed`）
@@ -25,6 +25,7 @@
 - `pattern` / `is_normal` / `detail`
 - `warnings_json`
 - `analysis_ploidy_json`
+- `spe_plot_path` / `num_plot_path`（自动绘制的 kmer 峰图路径）
 - `raw_json`
 
 ### 3. nt_results（1:1）
@@ -53,6 +54,7 @@
 - `GET /health`
 - `GET /api/cases` 列表查询（`limit/offset/target_species/final_level/should_transfer/status`）
 - `GET /api/cases/{case_id}` 样本详情
+- `GET /api/cases/{case_id}/kmer-plot?spectrum=spe|num` 获取 kmer 峰图（PNG）
 - `DELETE /api/cases/{case_id}` 删除样本（删除后可重新发起同路径判定）
 - `POST /api/cases/check-by-path` 只检查样本目录文件是否齐全（不执行判定）
 - `POST /api/cases/run-kmer` 输入样本目录，执行 kmer 判定并入库
@@ -157,7 +159,7 @@ curl -X POST "$BASE_URL/api/cases/check-by-path" \
 ## 2) run-kmer
 ### 请求参数
 - `sample_dir`：样本目录
-- `sample_code`：样本编号（可选）
+- `sample_code`：样本编号（可选；未传或传空字符串时，默认取 `sample_dir` 最后一级目录名）
 - `case_id`：已有 case 时可传，传了就更新该 case（可选）
 - `verbose`：是否打印详细日志（默认 `true`）
 
@@ -220,7 +222,7 @@ curl -X POST "$BASE_URL/api/cases/run-by-path" \
 ## 6) rerun-survey（显式确认覆盖）
 ### 请求参数
 - `sample_dir`：样本目录（必须已存在历史记录）
-- `sample_code`：样本编号（可选）
+- `sample_code`：样本编号（可选；未传或传空字符串时，默认取 `sample_dir` 最后一级目录名）
 - `verbose`：是否打印详细日志（默认 `true`）
 - `confirm`：必须为 `true`，否则拒绝执行
 
@@ -243,15 +245,30 @@ curl -X POST "$BASE_URL/api/cases/rerun-survey" \
 - 条件不满足时：`executed=false`，仅返回缺失项。
 - `run-kmer/run-nt/run-survey/run-by-path` 都会先检查 `sample_dir` 是否已存在历史记录；若已存在，返回 `409`。
 - `rerun-survey` 用于显式覆盖重跑：`confirm=true` 且路径已存在时才执行。
+- 执行类接口若未传 `sample_code`（或传空字符串），会自动使用 `sample_dir` 的最后一级目录名作为样本编号。
 - `executed=true`：该接口对应步骤执行成功并已入库。
 - `case_id`：数据库中的样本主键，可用于后续 `GET /api/cases/{case_id}` 查询。
 - `run-survey/rerun-survey/run-by-path` 的判定入口统一与 `survey_judge_single.py` 对齐：目标物种由 `all.ntcls.xls` 首行 `Sample name` 推导，并同时用于 kmer 与 nt。
+- `run-kmer/run-survey/rerun-survey/run-by-path` 会自动绘制 Spe/Num 峰图，并写入 `kmer_result.spe_plot_path/num_plot_path`。
+- 峰图统一输出到固定目录 `data/kmer_plots/`（按 `sample_dir` 哈希分桶），不再写回样本目录。
+
+## 7) 获取 kmer 峰图
+### 请求参数
+- `spectrum`：`spe` 或 `num`
+
+### curl 示例
+```bash
+curl -L "$BASE_URL/api/cases/12/kmer-plot?spectrum=spe" --output spe_plot.png
+```
 
 ## 删除接口
 ### curl 示例
 ```bash
 curl -X DELETE "$BASE_URL/api/cases/12"
 ```
+
+### 行为说明
+- 删除样本记录时会同步删除该样本关联的峰图文件（仅清理 `data/kmer_plots/` 受管目录内文件）。
 
 ### run-survey 响应示例（精简）
 ```json
@@ -303,5 +320,17 @@ backend/
 
 ## 运行方式
 ```bash
-conda run -n zhurui_agent python -m uvicorn backend.app.main:app --reload --port 8001
+conda run -n zhurui_agent python -m uvicorn backend.app.main:app --host 0.0.0.0 --reload --port 8001
+```
+
+后台运行方式：
+```bash
+mkdir -p logs
+nohup python -m uvicorn backend.app.main:app --host 0.0.0.0 --reload --port 8001 > logs/backend_dev.log 2>&1 &
+echo $! > logs/backend_dev.pid
+```
+
+停止后台服务：
+```bash
+kill "$(cat logs/backend_dev.pid)"
 ```

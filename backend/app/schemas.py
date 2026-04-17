@@ -33,6 +33,8 @@ class KmerResultIn(BaseModel):
     detail: str | None = None
     warnings: list[str] = Field(default_factory=list)
     analysis_ploidy: AnalysisPloidy | None = None
+    spe_plot_path: str | None = None
+    num_plot_path: str | None = None
     raw_payload: dict[str, Any] | None = None
 
 
@@ -86,6 +88,8 @@ class KmerResultOut(BaseModel):
     num_peaks: PeaksData | None = None
     warnings: list[str] = Field(default_factory=list)
     analysis_ploidy: dict[str, Any] | None = None
+    spe_plot_path: str | None = None
+    num_plot_path: str | None = None
     created_at: datetime | None = None
     updated_at: datetime | None = None
 

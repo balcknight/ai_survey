@@ -24,7 +24,7 @@ const store = useCasesStore()
 
     <el-drawer
       v-model="store.boardDrawerVisible"
-      direction="ltr"
+      direction="rtl"
       size="56%"
       destroy-on-close
       :with-header="false"

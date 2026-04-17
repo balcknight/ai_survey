@@ -8,12 +8,18 @@ const store = useCasesStore()
 
 const showSurveyRemark = ref(false)
 const showMetricsRemark = ref(false)
+const plotPreviewVisible = ref(false)
+const plotPreviewTitle = ref('')
+const plotPreviewUrl = ref('')
 
 watch(
   () => store.selectedCaseId,
   () => {
     showSurveyRemark.value = false
     showMetricsRemark.value = false
+    plotPreviewVisible.value = false
+    plotPreviewTitle.value = ''
+    plotPreviewUrl.value = ''
   },
 )
 
@@ -27,6 +33,39 @@ const resultMetricCompareRows = computed(() => {
     adjusted: adjusted[key],
   }))
 })
+
+const apiBase = import.meta.env.VITE_API_BASE_URL ?? 'http://192.168.20.24:8001'
+
+const spePlotUrl = computed(() => {
+  const caseId = store.selectedCase?.id
+  const plotPath = store.selectedCase?.kmer_result?.spe_plot_path
+  const updatedAt = store.selectedCase?.kmer_result?.updated_at ?? store.selectedCase?.updated_at
+  if (!caseId || !plotPath) return ''
+  const qs = new URLSearchParams({
+    spectrum: 'spe',
+    t: String(updatedAt ?? ''),
+  })
+  return `${apiBase}/api/cases/${caseId}/kmer-plot?${qs.toString()}`
+})
+
+const numPlotUrl = computed(() => {
+  const caseId = store.selectedCase?.id
+  const plotPath = store.selectedCase?.kmer_result?.num_plot_path
+  const updatedAt = store.selectedCase?.kmer_result?.updated_at ?? store.selectedCase?.updated_at
+  if (!caseId || !plotPath) return ''
+  const qs = new URLSearchParams({
+    spectrum: 'num',
+    t: String(updatedAt ?? ''),
+  })
+  return `${apiBase}/api/cases/${caseId}/kmer-plot?${qs.toString()}`
+})
+
+function openPlotPreview(kind: 'Spe' | 'Num', url: string) {
+  if (!url) return
+  plotPreviewTitle.value = `${kind} 峰图`
+  plotPreviewUrl.value = url
+  plotPreviewVisible.value = true
+}
 
 async function onRerun() {
   await ElMessageBox.confirm('将覆盖该路径已有记录，是否继续？', '确认重跑', {
@@ -86,8 +125,34 @@ async function onDelete() {
           <div class="kv-grid">
             <div><b>pattern:</b> {{ formatCellValue(store.selectedCase?.kmer_result?.pattern) }}</div>
             <div><b>is_normal:</b> {{ formatCellValue(store.selectedCase?.kmer_result?.is_normal) }}</div>
+            <div><b>spe_plot_path:</b> {{ formatCellValue(store.selectedCase?.kmer_result?.spe_plot_path) }}</div>
+            <div><b>num_plot_path:</b> {{ formatCellValue(store.selectedCase?.kmer_result?.num_plot_path) }}</div>
             <div class="span-2"><b>detail:</b> {{ formatLongText(store.selectedCase?.kmer_result?.detail) }}</div>
             <div class="span-2"><b>warnings:</b> {{ formatLongText(store.selectedCase?.kmer_result?.warnings) }}</div>
+          </div>
+          <div class="kmer-plot-grid">
+            <el-card shadow="never">
+              <template #header>Spe 峰图</template>
+              <el-empty v-if="!spePlotUrl" description="暂无 Spe 峰图" :image-size="80" />
+              <img
+                v-else
+                :src="spePlotUrl"
+                alt="spe-peak-plot"
+                class="kmer-plot-image"
+                @click="openPlotPreview('Spe', spePlotUrl)"
+              />
+            </el-card>
+            <el-card shadow="never">
+              <template #header>Num 峰图</template>
+              <el-empty v-if="!numPlotUrl" description="暂无 Num 峰图" :image-size="80" />
+              <img
+                v-else
+                :src="numPlotUrl"
+                alt="num-peak-plot"
+                class="kmer-plot-image"
+                @click="openPlotPreview('Num', numPlotUrl)"
+              />
+            </el-card>
           </div>
         </el-card>
 
@@ -148,6 +213,17 @@ async function onDelete() {
       </div>
     </template>
   </el-card>
+
+  <el-dialog
+    v-model="plotPreviewVisible"
+    :title="plotPreviewTitle"
+    width="86%"
+    top="4vh"
+    append-to-body
+    destroy-on-close
+  >
+    <img v-if="plotPreviewUrl" :src="plotPreviewUrl" alt="kmer-plot-preview" class="kmer-plot-preview-image" />
+  </el-dialog>
 </template>
 
 <style scoped>
@@ -205,6 +281,28 @@ async function onDelete() {
   font-size: 14px;
 }
 
+.kmer-plot-grid {
+  margin-top: 12px;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(280px, 1fr));
+  gap: 12px;
+}
+
+.kmer-plot-image {
+  width: 100%;
+  height: auto;
+  display: block;
+  border-radius: 6px;
+  border: 1px solid #e3e8ef;
+  cursor: zoom-in;
+}
+
+.kmer-plot-preview-image {
+  width: 100%;
+  height: auto;
+  display: block;
+}
+
 @media (max-width: 1100px) {
   .kv-grid {
     grid-template-columns: 1fr;
@@ -212,6 +310,10 @@ async function onDelete() {
 
   .span-2 {
     grid-column: span 1;
+  }
+
+  .kmer-plot-grid {
+    grid-template-columns: 1fr;
   }
 }
 </style>

@@ -39,6 +39,62 @@ npm run preview
 VITE_API_BASE_URL=http://192.168.20.24:8001
 ```
 
+### 3.5 内网访问与 404 排障（2026-04-16）
+现象：
+- 本机 `npm run dev` 正常启动，日志显示 `Local: http://localhost:5173/`
+- 内网访问 `https://192.168.20.24:5173/cases` 返回 404（或不可达）
+
+排查结论：
+- 当前 `Vite` 默认仅监听本机回环地址（如 `[::1]:5173`），不会对内网网卡开放。
+- 当前 dev server 协议是 `HTTP`，不是 `HTTPS`；直接用 `https://` 访问会协议不匹配。
+- 该问题优先是“监听地址 + 协议”配置问题，不是前端路由 `createWebHistory()` 本身问题。
+- 防火墙问题通常表现为超时/拒绝连接，不是典型 404。
+
+标准启动方式（内网调试）：
+```bash
+cd frontend
+npm run dev -- --host 0.0.0.0 --port 5173
+```
+
+后台运行方式（内网调试，关闭 VSCode 仍保持运行）：
+```bash
+mkdir -p logs
+setsid bash -lc 'cd /data/work/zhurui/survey_rec/frontend && exec npm run dev -- --host 0.0.0.0 --port 5173' \
+  > /data/work/zhurui/survey_rec/logs/frontend_dev.log 2>&1 < /dev/null &
+echo $! > /data/work/zhurui/survey_rec/logs/frontend_dev.pid
+```
+
+停止后台服务：
+```bash
+kill "$(cat logs/frontend_dev.pid)"
+```
+
+检查是否已脱离终端（`TTY` 应为 `?`）：
+```bash
+ps -fp "$(cat logs/frontend_dev.pid)"
+```
+
+正确访问地址：
+- `http://192.168.20.24:5173/cases`
+
+推荐固化到 `vite.config.ts`（避免每次手工加参数）：
+```ts
+import { defineConfig } from 'vite'
+import vue from '@vitejs/plugin-vue'
+
+export default defineConfig({
+  plugins: [vue()],
+  server: {
+    host: '0.0.0.0',
+    port: 5173,
+  },
+})
+```
+
+如必须使用 `HTTPS`：
+- 方案 1：在 Vite `server.https` 配置证书；
+- 方案 2：通过 Nginx/Caddy 反向代理并做 TLS 终止。
+
 ## 4. 当前页面原型结构（已落地）
 
 ### 4.1 路由
