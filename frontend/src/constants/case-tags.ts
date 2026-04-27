@@ -4,6 +4,7 @@ export const FINAL_LEVEL_TAG_TYPE: Record<string, 'success' | 'warning' | 'dange
   正常: 'success',
   轻度污染: 'warning',
   重度污染: 'danger',
+  待人工复核: 'warning',
   fail: 'info',
 }
 

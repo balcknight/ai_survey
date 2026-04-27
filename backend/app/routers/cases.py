@@ -82,16 +82,42 @@ def _attach_kmer_plots(kmer_result: dict, file_check: schemas.FileCheckOut, samp
 
 def _to_nt_input(nt_result: dict) -> schemas.NtResultIn:
     return schemas.NtResultIn(
-        nt_score=nt_result.get("nt_score"),
         nt_level=nt_result.get("nt_level"),
-        ntcls_score=nt_result.get("ntcls_score"),
-        ntspe_score=nt_result.get("ntspe_score"),
+        is_heavy_contamination=nt_result.get("is_heavy_contamination"),
+        nt_rule_version=nt_result.get("nt_rule_version"),
+        target_species=nt_result.get("target_species"),
+        target_category=nt_result.get("target_category"),
+        source_nt_count=nt_result.get("source_nt_count"),
+        valid_nt_count=nt_result.get("valid_nt_count"),
+        dominant_category=nt_result.get("dominant_category"),
+        dominant_ratio_percent=nt_result.get("dominant_ratio_percent"),
+        metazoa_ratio_percent=nt_result.get("metazoa_ratio_percent"),
+        plantae_ratio_percent=nt_result.get("plantae_ratio_percent"),
+        bacteria_ratio_percent=nt_result.get("bacteria_ratio_percent"),
+        fungi_ratio_percent=nt_result.get("fungi_ratio_percent"),
+        viruses_ratio_percent=nt_result.get("viruses_ratio_percent"),
+        reasonable_contamination_ratio_percent=nt_result.get("reasonable_contamination_ratio_percent"),
+        pollution_ratio_percent=nt_result.get("pollution_ratio_percent"),
+        pollution_threshold_percent=nt_result.get("pollution_threshold_percent"),
         ntcls_detail=nt_result.get("ntcls_detail"),
         ntspe_detail=nt_result.get("ntspe_detail"),
-        ntcls_top1_pass=nt_result.get("ntcls_top1_pass"),
-        ntcls_contamination_pass=nt_result.get("ntcls_contamination_pass"),
-        ntspe_contamination_pass=nt_result.get("ntspe_contamination_pass"),
+        class_filtered_path=nt_result.get("class_filtered_path"),
+        class_filtered_paths=nt_result.get("class_filtered_paths") or [],
+        small_judged_paths=nt_result.get("small_judged_paths") or [],
+        nt_results=nt_result.get("nt_results") or [],
         raw_payload=nt_result,
+    )
+
+
+def _to_gc_input(gc_result: dict) -> schemas.GcResultIn:
+    return schemas.GcResultIn(
+        executed=bool(gc_result.get("executed", False)),
+        status=gc_result.get("status"),
+        reason=gc_result.get("reason"),
+        pos_path=gc_result.get("pos_path"),
+        heavy_contamination=gc_result.get("heavy_contamination"),
+        gc_raw=gc_result.get("gc_raw"),
+        raw_payload=gc_result,
     )
 
 
@@ -100,7 +126,7 @@ def _to_survey_input(survey_result: dict) -> schemas.SurveyResultIn:
         final_level=survey_result.get("final_level"),
         should_transfer=survey_result.get("should_transfer"),
         remark=survey_result.get("remark"),
-        rule_version="survey_rule_v1",
+        rule_version=survey_result.get("rule_version") or "survey_rule_v2_gc",
         raw_payload=survey_result,
     )
 
@@ -332,6 +358,7 @@ def run_survey(payload: schemas.RunStepByPathIn, db: Session = Depends(get_db)):
         merged = run_survey_by_paths(file_check=file_check, verbose=payload.verbose)
         kmer_result = _attach_kmer_plots(merged, file_check, normalized_dir)
         nt_result = merged.get("nt_result", {})
+        gc_result = merged.get("gc_result", {})
         survey_result = merged.get("survey_result", {})
         result_metrics = merged.get("result_metrics", {})
         target_species = merged.get("target_species") or infer_target_species(file_check) or "未提供"
@@ -345,6 +372,7 @@ def run_survey(payload: schemas.RunStepByPathIn, db: Session = Depends(get_db)):
         )
         crud.save_kmer_result(db, obj.id, _to_kmer_input(kmer_result))
         crud.save_nt_result(db, obj.id, _to_nt_input(nt_result))
+        crud.save_gc_result(db, obj.id, _to_gc_input(gc_result))
         crud.save_survey_result(db, obj.id, _to_survey_input(survey_result))
         if result_metrics:
             crud.save_result_metrics(db, obj.id, _to_result_metrics_input(result_metrics))
@@ -392,6 +420,7 @@ def rerun_survey(payload: schemas.RerunSurveyIn, db: Session = Depends(get_db)):
         merged = run_survey_by_paths(file_check=file_check, verbose=payload.verbose)
         kmer_result = _attach_kmer_plots(merged, file_check, normalized_dir)
         nt_result = merged.get("nt_result", {})
+        gc_result = merged.get("gc_result", {})
         survey_result = merged.get("survey_result", {})
         result_metrics = merged.get("result_metrics", {})
         target_species = merged.get("target_species") or infer_target_species(file_check) or "未提供"
@@ -405,6 +434,7 @@ def rerun_survey(payload: schemas.RerunSurveyIn, db: Session = Depends(get_db)):
         )
         crud.save_kmer_result(db, obj.id, _to_kmer_input(kmer_result))
         crud.save_nt_result(db, obj.id, _to_nt_input(nt_result))
+        crud.save_gc_result(db, obj.id, _to_gc_input(gc_result))
         crud.save_survey_result(db, obj.id, _to_survey_input(survey_result))
         if result_metrics:
             crud.save_result_metrics(db, obj.id, _to_result_metrics_input(result_metrics))

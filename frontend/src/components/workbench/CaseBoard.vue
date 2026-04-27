@@ -34,6 +34,21 @@ const resultMetricCompareRows = computed(() => {
   }))
 })
 
+const gcDecision = computed(() => {
+  const gcRaw = store.selectedCase?.gc_result?.gc_raw as Record<string, unknown> | null | undefined
+  return (gcRaw?.decision ?? null) as Record<string, unknown> | null
+})
+
+const gcGlobalStats = computed(() => {
+  const gcRaw = store.selectedCase?.gc_result?.gc_raw as Record<string, unknown> | null | undefined
+  return (gcRaw?.global_stats ?? null) as Record<string, unknown> | null
+})
+
+const gcArtifacts = computed(() => {
+  const gcRaw = store.selectedCase?.gc_result?.gc_raw as Record<string, unknown> | null | undefined
+  return (gcRaw?.artifacts ?? null) as Record<string, unknown> | null
+})
+
 const apiBase = import.meta.env.VITE_API_BASE_URL ?? 'http://192.168.20.24:8001'
 
 const spePlotUrl = computed(() => {
@@ -159,13 +174,27 @@ async function onDelete() {
         <el-card shadow="never">
           <template #header>NT 结果</template>
           <div class="kv-grid">
-            <div><b>nt_score:</b> {{ formatCellValue(store.selectedCase?.nt_result?.nt_score) }}</div>
             <div><b>nt_level:</b> {{ formatCellValue(store.selectedCase?.nt_result?.nt_level) }}</div>
-            <div><b>ntcls_score:</b> {{ formatCellValue(store.selectedCase?.nt_result?.ntcls_score) }}</div>
-            <div><b>ntspe_score:</b> {{ formatCellValue(store.selectedCase?.nt_result?.ntspe_score) }}</div>
-            <div><b>ntcls_top1_pass:</b> {{ formatCellValue(store.selectedCase?.nt_result?.ntcls_top1_pass) }}</div>
-            <div><b>ntcls_contamination_pass:</b> {{ formatCellValue(store.selectedCase?.nt_result?.ntcls_contamination_pass) }}</div>
-            <div><b>ntspe_contamination_pass:</b> {{ formatCellValue(store.selectedCase?.nt_result?.ntspe_contamination_pass) }}</div>
+            <div><b>is_heavy_contamination:</b> {{ formatCellValue(store.selectedCase?.nt_result?.is_heavy_contamination) }}</div>
+            <div><b>dominant_category:</b> {{ formatCellValue(store.selectedCase?.nt_result?.dominant_category) }}</div>
+            <div><b>pollution_ratio_percent:</b> {{ formatCellValue(store.selectedCase?.nt_result?.pollution_ratio_percent) }}</div>
+            <div><b>pollution_threshold_percent:</b> {{ formatCellValue(store.selectedCase?.nt_result?.pollution_threshold_percent) }}</div>
+            <div class="span-2"><b>ntcls_detail:</b> {{ formatLongText(store.selectedCase?.nt_result?.ntcls_detail) }}</div>
+            <div class="span-2"><b>ntspe_detail:</b> {{ formatLongText(store.selectedCase?.nt_result?.ntspe_detail) }}</div>
+          </div>
+        </el-card>
+
+        <el-card shadow="never">
+          <template #header>GC 复核</template>
+          <div class="kv-grid">
+            <div><b>executed:</b> {{ formatCellValue(store.selectedCase?.gc_result?.executed) }}</div>
+            <div><b>status:</b> {{ formatCellValue(store.selectedCase?.gc_result?.status) }}</div>
+            <div><b>heavy_contamination:</b> {{ formatCellValue(store.selectedCase?.gc_result?.heavy_contamination) }}</div>
+            <div><b>pos_path:</b> {{ formatCellValue(store.selectedCase?.gc_result?.pos_path) }}</div>
+            <div class="span-2"><b>reason:</b> {{ formatLongText(store.selectedCase?.gc_result?.reason) }}</div>
+            <div class="span-2"><b>gc_raw.decision:</b> {{ formatLongText(gcDecision) }}</div>
+            <div class="span-2"><b>gc_raw.global_stats:</b> {{ formatLongText(gcGlobalStats) }}</div>
+            <div class="span-2"><b>gc_raw.artifacts:</b> {{ formatLongText(gcArtifacts) }}</div>
           </div>
         </el-card>
 

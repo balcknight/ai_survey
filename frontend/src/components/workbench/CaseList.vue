@@ -20,6 +20,7 @@ const finalLevelOptions = [
   { label: '正常', value: '正常' },
   { label: '轻度污染', value: '轻度污染' },
   { label: '重度污染', value: '重度污染' },
+  { label: '待人工复核', value: '待人工复核' },
   { label: 'fail', value: 'fail' },
 ]
 
@@ -27,6 +28,7 @@ const shouldTransferOptions = [
   { label: '全部', value: '' },
   { label: '是', value: '是' },
   { label: '否', value: '否' },
+  { label: '转人工', value: '转人工' },
 ]
 
 const currentPage = computed({

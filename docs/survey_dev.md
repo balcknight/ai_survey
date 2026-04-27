@@ -265,7 +265,7 @@ GC 判定失败的常见原因（转人工合理）：
 | 原始kmer字段 | 保留 `tmp_kmer_result_with_ai.json` 中的全部字段（如 `pattern/is_normal/detail/warnings/analysis_ploidy`） |
 | target_species | 从 `all.ntcls.xls` 读取的目标物种名 |
 | nt_result | NT聚合判定对象：如 `nt_level/is_heavy_contamination/nt_rule_version/target_species/target_category/source_nt_count/valid_nt_count/dominant_category/dominant_ratio_percent/pollution_ratio_percent/pollution_threshold_percent/class_filtered_path/class_filtered_paths/small_judged_paths/nt_results/ntcls_detail/ntspe_detail` |
-| gc_result | GC复核结果对象：`executed/status/reason`；执行成功时额外包含 `pos_path/heavy_contamination/gc_decision/gc_global_stats/gc_artifacts/gc_raw` |
+| gc_result | GC复核结果对象：`executed/status/reason`；执行成功时额外包含 `pos_path/heavy_contamination/gc_raw`（详细判定位于 `gc_raw.decision/global_stats/artifacts`） |
 | survey_result | 综合结果对象：`final_level/should_transfer/remark` |
 | result_metrics | 从 `*.Result.xls` 读取并修正后的结果对象：`result_path/ploidy_pattern/ploidy_multiplier/raw/adjusted/remark` |
 

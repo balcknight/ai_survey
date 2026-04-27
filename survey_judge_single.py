@@ -236,15 +236,13 @@ def _run_gc_check(sample_dir: str) -> dict[str, Any]:
         out_json = str(Path(sample_dir) / f'{pos_stem}.gc_line.json')
         out_png = str(Path(sample_dir) / f'{pos_stem}.gc_line.png')
         gc_raw = run_gc_depth_line(pos_path=pos_path, out_json=out_json, out_png=out_png)
+        decision = gc_raw.get('decision') or {}
         return {
             'executed': True,
             'status': 'ok',
-            'reason': '',
+            'reason': decision.get('reason', ''),
             'pos_path': pos_path,
-            'heavy_contamination': bool(gc_raw.get('decision', {}).get('heavy_contamination', True)),
-            'gc_decision': gc_raw.get('decision'),
-            'gc_global_stats': gc_raw.get('global_stats'),
-            'gc_artifacts': gc_raw.get('artifacts'),
+            'heavy_contamination': bool(decision.get('heavy_contamination', True)),
             'gc_raw': gc_raw,
         }
     except Exception as exc:
@@ -462,7 +460,7 @@ def run_single_survey(
         print(f"  executed={gc_result.get('executed')}, status={gc_result.get('status')}")
         print(f"  reason={gc_result.get('reason')}")
         if gc_result.get('status') == 'ok':
-            decision = gc_result.get('gc_decision') or {}
+            decision = (gc_result.get('gc_raw') or {}).get('decision') or {}
             print(
                 f"  GC结论: heavy_contamination={gc_result.get('heavy_contamination')}, "
                 f"判定理由={decision.get('reason')}"

@@ -36,15 +36,45 @@ def _upsert_nt(db: Session, case_id: int, payload: schemas.NtResultIn) -> models
         obj = models.NtResult(case_id=case_id)
         db.add(obj)
 
-    obj.nt_score = payload.nt_score
     obj.nt_level = payload.nt_level
-    obj.ntcls_score = payload.ntcls_score
-    obj.ntspe_score = payload.ntspe_score
+    obj.is_heavy_contamination = payload.is_heavy_contamination
+    obj.nt_rule_version = payload.nt_rule_version
+    obj.target_species = payload.target_species
+    obj.target_category = payload.target_category
+    obj.source_nt_count = payload.source_nt_count
+    obj.valid_nt_count = payload.valid_nt_count
+    obj.dominant_category = payload.dominant_category
+    obj.dominant_ratio_percent = payload.dominant_ratio_percent
+    obj.metazoa_ratio_percent = payload.metazoa_ratio_percent
+    obj.plantae_ratio_percent = payload.plantae_ratio_percent
+    obj.bacteria_ratio_percent = payload.bacteria_ratio_percent
+    obj.fungi_ratio_percent = payload.fungi_ratio_percent
+    obj.viruses_ratio_percent = payload.viruses_ratio_percent
+    obj.reasonable_contamination_ratio_percent = payload.reasonable_contamination_ratio_percent
+    obj.pollution_ratio_percent = payload.pollution_ratio_percent
+    obj.pollution_threshold_percent = payload.pollution_threshold_percent
     obj.ntcls_detail = payload.ntcls_detail
     obj.ntspe_detail = payload.ntspe_detail
-    obj.ntcls_top1_pass = payload.ntcls_top1_pass
-    obj.ntcls_contamination_pass = payload.ntcls_contamination_pass
-    obj.ntspe_contamination_pass = payload.ntspe_contamination_pass
+    obj.class_filtered_path = payload.class_filtered_path
+    obj.class_filtered_paths_json = to_json_text(payload.class_filtered_paths)
+    obj.small_judged_paths_json = to_json_text(payload.small_judged_paths)
+    obj.nt_results_json = to_json_text(payload.nt_results)
+    obj.raw_json = to_json_text(payload.raw_payload)
+    return obj
+
+
+def _upsert_gc(db: Session, case_id: int, payload: schemas.GcResultIn) -> models.GcResult:
+    obj = db.execute(select(models.GcResult).where(models.GcResult.case_id == case_id)).scalar_one_or_none()
+    if obj is None:
+        obj = models.GcResult(case_id=case_id)
+        db.add(obj)
+
+    obj.executed = payload.executed
+    obj.status = payload.status
+    obj.reason = payload.reason
+    obj.pos_path = payload.pos_path
+    obj.heavy_contamination = payload.heavy_contamination
+    obj.gc_raw_json = to_json_text(payload.gc_raw)
     obj.raw_json = to_json_text(payload.raw_payload)
     return obj
 
@@ -101,6 +131,8 @@ def create_case(db: Session, payload: schemas.CaseCreate) -> models.SurveyCase:
     if payload.nt_result:
         _upsert_nt(db, obj.id, payload.nt_result)
         obj.status = "nt_done" if obj.status == "created" else obj.status
+    if payload.gc_result:
+        _upsert_gc(db, obj.id, payload.gc_result)
     if payload.survey_result:
         survey = _upsert_survey(db, obj.id, payload.survey_result)
         obj.final_level = survey.final_level
@@ -147,6 +179,7 @@ def import_case_from_survey_json(
             raw_payload=payload,
         ),
         nt_result=schemas.NtResultIn(**payload.get("nt_result", {})) if payload.get("nt_result") else None,
+        gc_result=schemas.GcResultIn(**payload.get("gc_result", {})) if payload.get("gc_result") else None,
         survey_result=(
             schemas.SurveyResultIn(**payload.get("survey_result", {}))
             if payload.get("survey_result")
@@ -218,6 +251,16 @@ def save_nt_result(db: Session, case_id: int, payload: schemas.NtResultIn) -> mo
     return obj
 
 
+def save_gc_result(db: Session, case_id: int, payload: schemas.GcResultIn) -> models.SurveyCase:
+    obj = db.execute(select(models.SurveyCase).where(models.SurveyCase.id == case_id)).scalar_one_or_none()
+    if obj is None:
+        raise ValueError(f"case_id={case_id} 不存在")
+    _upsert_gc(db, case_id, payload)
+    db.commit()
+    db.refresh(obj)
+    return obj
+
+
 def save_survey_result(db: Session, case_id: int, payload: schemas.SurveyResultIn) -> models.SurveyCase:
     obj = db.execute(select(models.SurveyCase).where(models.SurveyCase.id == case_id)).scalar_one_or_none()
     if obj is None:
@@ -267,7 +310,11 @@ def list_cases(
 ) -> list[models.SurveyCase]:
     stmt: Select[tuple[models.SurveyCase]] = (
         select(models.SurveyCase)
-        .options(joinedload(models.SurveyCase.kmer_result), joinedload(models.SurveyCase.nt_result))
+        .options(
+            joinedload(models.SurveyCase.kmer_result),
+            joinedload(models.SurveyCase.nt_result),
+            joinedload(models.SurveyCase.gc_result),
+        )
         .order_by(models.SurveyCase.updated_at.desc(), models.SurveyCase.id.desc())
         .limit(limit)
         .offset(offset)
@@ -290,6 +337,7 @@ def get_case_detail(db: Session, case_id: int) -> models.SurveyCase | None:
         .options(
             joinedload(models.SurveyCase.kmer_result),
             joinedload(models.SurveyCase.nt_result),
+            joinedload(models.SurveyCase.gc_result),
             joinedload(models.SurveyCase.survey_result),
             joinedload(models.SurveyCase.result_metrics),
         )
@@ -305,8 +353,10 @@ def to_case_summary_out(obj: models.SurveyCase) -> schemas.CaseSummaryOut:
         status=obj.status,
         kmer_pattern=obj.kmer_result.pattern if obj.kmer_result else None,
         kmer_is_normal=obj.kmer_result.is_normal if obj.kmer_result else None,
-        nt_score=obj.nt_result.nt_score if obj.nt_result else None,
         nt_level=obj.nt_result.nt_level if obj.nt_result else None,
+        nt_is_heavy_contamination=obj.nt_result.is_heavy_contamination if obj.nt_result else None,
+        gc_status=obj.gc_result.status if obj.gc_result else None,
+        gc_heavy_contamination=obj.gc_result.heavy_contamination if obj.gc_result else None,
         final_level=obj.final_level,
         should_transfer=obj.should_transfer,
         updated_at=obj.updated_at,
@@ -316,6 +366,7 @@ def to_case_summary_out(obj: models.SurveyCase) -> schemas.CaseSummaryOut:
 def to_case_detail_out(obj: models.SurveyCase) -> schemas.CaseDetailOut:
     kmer_out = None
     nt_out = None
+    gc_out = None
     survey_out = None
     result_metrics_out = None
 
@@ -342,17 +393,43 @@ def to_case_detail_out(obj: models.SurveyCase) -> schemas.CaseDetailOut:
 
     if obj.nt_result:
         nt_out = schemas.NtResultOut(
-            nt_score=obj.nt_result.nt_score,
             nt_level=obj.nt_result.nt_level,
-            ntcls_score=obj.nt_result.ntcls_score,
-            ntspe_score=obj.nt_result.ntspe_score,
+            is_heavy_contamination=obj.nt_result.is_heavy_contamination,
+            nt_rule_version=obj.nt_result.nt_rule_version,
+            target_species=obj.nt_result.target_species,
+            target_category=obj.nt_result.target_category,
+            source_nt_count=obj.nt_result.source_nt_count,
+            valid_nt_count=obj.nt_result.valid_nt_count,
+            dominant_category=obj.nt_result.dominant_category,
+            dominant_ratio_percent=obj.nt_result.dominant_ratio_percent,
+            metazoa_ratio_percent=obj.nt_result.metazoa_ratio_percent,
+            plantae_ratio_percent=obj.nt_result.plantae_ratio_percent,
+            bacteria_ratio_percent=obj.nt_result.bacteria_ratio_percent,
+            fungi_ratio_percent=obj.nt_result.fungi_ratio_percent,
+            viruses_ratio_percent=obj.nt_result.viruses_ratio_percent,
+            reasonable_contamination_ratio_percent=obj.nt_result.reasonable_contamination_ratio_percent,
+            pollution_ratio_percent=obj.nt_result.pollution_ratio_percent,
+            pollution_threshold_percent=obj.nt_result.pollution_threshold_percent,
             ntcls_detail=obj.nt_result.ntcls_detail,
             ntspe_detail=obj.nt_result.ntspe_detail,
-            ntcls_top1_pass=obj.nt_result.ntcls_top1_pass,
-            ntcls_contamination_pass=obj.nt_result.ntcls_contamination_pass,
-            ntspe_contamination_pass=obj.nt_result.ntspe_contamination_pass,
+            class_filtered_path=obj.nt_result.class_filtered_path,
+            class_filtered_paths=from_json_text(obj.nt_result.class_filtered_paths_json, []),
+            small_judged_paths=from_json_text(obj.nt_result.small_judged_paths_json, []),
+            nt_results=from_json_text(obj.nt_result.nt_results_json, []),
             created_at=obj.nt_result.created_at,
             updated_at=obj.nt_result.updated_at,
+        )
+
+    if obj.gc_result:
+        gc_out = schemas.GcResultOut(
+            executed=obj.gc_result.executed,
+            status=obj.gc_result.status,
+            reason=obj.gc_result.reason,
+            pos_path=obj.gc_result.pos_path,
+            heavy_contamination=obj.gc_result.heavy_contamination,
+            gc_raw=from_json_text(obj.gc_result.gc_raw_json, None),
+            created_at=obj.gc_result.created_at,
+            updated_at=obj.gc_result.updated_at,
         )
 
     if obj.survey_result:
@@ -389,6 +466,7 @@ def to_case_detail_out(obj: models.SurveyCase) -> schemas.CaseDetailOut:
         updated_at=obj.updated_at,
         kmer_result=kmer_out,
         nt_result=nt_out,
+        gc_result=gc_out,
         survey_result=survey_out,
         result_metrics=result_metrics_out,
     )

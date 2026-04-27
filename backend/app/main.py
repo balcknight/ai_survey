@@ -1,8 +1,9 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from sqlalchemy import inspect, text
 
 from .db import Base, engine
 from .routers.cases import router as cases_router
@@ -24,21 +25,9 @@ app.add_middleware(
 
 
 def init_db():
+    db_path = Path("data/survey_backend.sqlite3")
+    db_path.parent.mkdir(parents=True, exist_ok=True)
     Base.metadata.create_all(bind=engine)
-    _apply_lightweight_migrations()
-
-
-def _apply_lightweight_migrations():
-    # 当前项目无 alembic，这里做幂等增量列补齐，避免升级时需要手动清库。
-    with engine.begin() as conn:
-        inspector = inspect(conn)
-        if "kmer_results" not in inspector.get_table_names():
-            return
-        cols = {c["name"] for c in inspector.get_columns("kmer_results")}
-        if "spe_plot_path" not in cols:
-            conn.execute(text("ALTER TABLE kmer_results ADD COLUMN spe_plot_path TEXT"))
-        if "num_plot_path" not in cols:
-            conn.execute(text("ALTER TABLE kmer_results ADD COLUMN num_plot_path TEXT"))
 
 
 @app.on_event("startup")

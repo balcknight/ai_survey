@@ -7,10 +7,12 @@ export interface CaseSummary {
   status: CaseStatus
   kmer_pattern: string | null
   kmer_is_normal: boolean | null
-  nt_score: number | null
   nt_level: string | null
+  nt_is_heavy_contamination: boolean | null
+  gc_status: string | null
+  gc_heavy_contamination: boolean | null
   final_level: string | null
-  should_transfer: '是' | '否' | null
+  should_transfer: '是' | '否' | '转人工' | null
   updated_at: string
 }
 
@@ -26,7 +28,11 @@ export interface PeaksData {
   freqs: number[]
 }
 
-export interface CaseDetail extends Omit<CaseSummary, 'kmer_pattern' | 'kmer_is_normal' | 'nt_score' | 'nt_level'> {
+export interface CaseDetail
+  extends Omit<
+    CaseSummary,
+    'kmer_pattern' | 'kmer_is_normal' | 'nt_level' | 'nt_is_heavy_contamination' | 'gc_status' | 'gc_heavy_contamination'
+  > {
   source_path: string | null
   remark: string | null
   created_at: string
@@ -44,15 +50,37 @@ export interface CaseDetail extends Omit<CaseSummary, 'kmer_pattern' | 'kmer_is_
     updated_at?: string | null
   } | null
   nt_result: {
-    nt_score: number | null
     nt_level: string | null
-    ntcls_score: number | null
-    ntspe_score: number | null
+    is_heavy_contamination: boolean | null
+    nt_rule_version: string | null
+    target_species: string | null
+    target_category: string | null
+    source_nt_count: number | null
+    valid_nt_count: number | null
+    dominant_category: string | null
+    dominant_ratio_percent: number | null
+    metazoa_ratio_percent: number | null
+    plantae_ratio_percent: number | null
+    bacteria_ratio_percent: number | null
+    fungi_ratio_percent: number | null
+    viruses_ratio_percent: number | null
+    reasonable_contamination_ratio_percent: number | null
+    pollution_ratio_percent: number | null
+    pollution_threshold_percent: number | null
     ntcls_detail: string | null
     ntspe_detail: string | null
-    ntcls_top1_pass: boolean | null
-    ntcls_contamination_pass: boolean | null
-    ntspe_contamination_pass: boolean | null
+    class_filtered_path: string | null
+    class_filtered_paths: string[]
+    small_judged_paths: string[]
+    nt_results: Record<string, unknown>[]
+  } | null
+  gc_result: {
+    executed: boolean
+    status: string | null
+    reason: string | null
+    pos_path: string | null
+    heavy_contamination: boolean | null
+    gc_raw: Record<string, unknown> | null
   } | null
   survey_result: {
     final_level: string | null
@@ -88,6 +116,9 @@ export interface RunResponse {
     complete?: boolean
     kmer_complete?: boolean
     nt_complete?: boolean
+    ntcls_source?: string | null
+    ntspe_source?: string | null
+    ntspe_paths?: string[]
   }
 }
 
@@ -98,7 +129,10 @@ export interface FileCheckResponse {
     spe_path: string | null
     num_path: string | null
     ntcls_path: string | null
+    ntcls_source: string | null
     ntspe_path: string | null
+    ntspe_paths: string[]
+    ntspe_source: string | null
     result_path: string | null
     missing: string[]
     kmer_complete: boolean

@@ -17,6 +17,10 @@ def _find_first(sample_path: Path, pattern: str) -> Path | None:
     return candidates[0]
 
 
+def _find_all(sample_path: Path, pattern: str) -> list[Path]:
+    return sorted(sample_path.glob(f"**/{pattern}"))
+
+
 def check_required_files(sample_dir: str) -> schemas.FileCheckOut:
     sample_path = Path(sample_dir).expanduser().resolve()
     if not sample_path.exists() or not sample_path.is_dir():
@@ -30,9 +34,16 @@ def check_required_files(sample_dir: str) -> schemas.FileCheckOut:
     spe_file = _find_first(sample_path, "*.SpeFreq.cut")
     num_file = _find_first(sample_path, "*.NumFreq.cut")
     ntcls_file = _find_first(sample_path, "all.ntcls.xls")
-    ntspe_file = _find_first(sample_path, "*_NT.species.xls")
-    if ntspe_file is None:
-        ntspe_file = _find_first(sample_path, "all.ntspe.xls")
+    ntcls_source = "primary:all.ntcls.xls"
+    if ntcls_file is None:
+        ntcls_file = _find_first(sample_path, "*.ntcls.xls")
+        ntcls_source = "backup:*.ntcls.xls"
+
+    ntspe_source = "primary:*.species.xls"
+    ntspe_files = _find_all(sample_path, "*.species.xls")
+    if not ntspe_files:
+        ntspe_source = "backup:*.species.test.xls"
+        ntspe_files = _find_all(sample_path, "*.species.test.xls")
     result_file = _find_first(sample_path, "*.Result.xls")
 
     missing: list[str] = []
@@ -41,9 +52,9 @@ def check_required_files(sample_dir: str) -> schemas.FileCheckOut:
     if num_file is None:
         missing.append("*.NumFreq.cut")
     if ntcls_file is None:
-        missing.append("all.ntcls.xls")
-    if ntspe_file is None:
-        missing.append("*_NT.species.xls 或 all.ntspe.xls")
+        missing.append("all.ntcls.xls（备选：*.ntcls.xls）")
+    if not ntspe_files:
+        missing.append("至少一个 *.species.xls（备选：*.species.test.xls）")
     if result_file is None:
         missing.append("*.Result.xls")
 
@@ -51,11 +62,14 @@ def check_required_files(sample_dir: str) -> schemas.FileCheckOut:
         spe_path=str(spe_file) if spe_file else None,
         num_path=str(num_file) if num_file else None,
         ntcls_path=str(ntcls_file) if ntcls_file else None,
-        ntspe_path=str(ntspe_file) if ntspe_file else None,
+        ntcls_source=ntcls_source if ntcls_file else None,
+        ntspe_path=str(ntspe_files[0]) if ntspe_files else None,
+        ntspe_paths=[str(p) for p in ntspe_files],
+        ntspe_source=ntspe_source if ntspe_files else None,
         result_path=str(result_file) if result_file else None,
         missing=missing,
         kmer_complete=(spe_file is not None and num_file is not None),
-        nt_complete=(ntcls_file is not None and ntspe_file is not None),
+        nt_complete=(ntcls_file is not None and len(ntspe_files) > 0),
         complete=(len(missing) == 0),
     )
 
@@ -83,11 +97,14 @@ def run_kmer_by_paths(file_check: schemas.FileCheckOut, verbose: bool = True) ->
 
 def run_nt_by_paths(file_check: schemas.FileCheckOut) -> tuple[str, dict]:
     if not file_check.nt_complete:
-        raise ValueError("缺少 NT 必需文件（all.ntcls.xls / all.ntspe.xls）")
+        raise ValueError("缺少 NT 必需文件（all.ntcls.xls 或 *.ntcls.xls；*.species.xls 或 *.species.test.xls）")
+    ntspe_path = file_check.ntspe_path or (file_check.ntspe_paths[0] if file_check.ntspe_paths else "")
+    if not ntspe_path:
+        raise ValueError("缺少 NT species 文件（*.species.xls 或 *.species.test.xls）")
     target_species = load_target_species(file_check.ntcls_path or "")
     nt_result = judge_nt_contamination(
         file_check.ntcls_path or "",
-        file_check.ntspe_path or "",
+        ntspe_path,
         target_species,
     )
     return target_species, nt_result
@@ -100,6 +117,7 @@ def run_survey_by_paths(file_check: schemas.FileCheckOut, verbose: bool = True) 
         spe_path=file_check.spe_path or "",
         num_path=file_check.num_path or "",
         ntcls_path=file_check.ntcls_path or "",
+        ntspe_paths=list(file_check.ntspe_paths or []),
         ntspe_path=file_check.ntspe_path or "",
         result_path=file_check.result_path or "",
         verbose=verbose,

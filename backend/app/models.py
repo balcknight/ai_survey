@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, String, Text
+from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Integer, String, Text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from .db import Base
@@ -32,6 +32,9 @@ class SurveyCase(Base):
     )
     nt_result: Mapped[NtResult | None] = relationship(
         "NtResult", back_populates="case", uselist=False, cascade="all, delete-orphan"
+    )
+    gc_result: Mapped[GcResult | None] = relationship(
+        "GcResult", back_populates="case", uselist=False, cascade="all, delete-orphan"
     )
     survey_result: Mapped[SurveyResult | None] = relationship(
         "SurveyResult", back_populates="case", uselist=False, cascade="all, delete-orphan"
@@ -74,15 +77,29 @@ class NtResult(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     case_id: Mapped[int] = mapped_column(ForeignKey("survey_cases.id"), unique=True, index=True)
-    nt_score: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
     nt_level: Mapped[str | None] = mapped_column(String(32), nullable=True, index=True)
-    ntcls_score: Mapped[int | None] = mapped_column(Integer, nullable=True)
-    ntspe_score: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    is_heavy_contamination: Mapped[bool | None] = mapped_column(Boolean, nullable=True, index=True)
+    nt_rule_version: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    target_species: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    target_category: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    source_nt_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    valid_nt_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    dominant_category: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    dominant_ratio_percent: Mapped[float | None] = mapped_column(Float, nullable=True)
+    metazoa_ratio_percent: Mapped[float | None] = mapped_column(Float, nullable=True)
+    plantae_ratio_percent: Mapped[float | None] = mapped_column(Float, nullable=True)
+    bacteria_ratio_percent: Mapped[float | None] = mapped_column(Float, nullable=True)
+    fungi_ratio_percent: Mapped[float | None] = mapped_column(Float, nullable=True)
+    viruses_ratio_percent: Mapped[float | None] = mapped_column(Float, nullable=True)
+    reasonable_contamination_ratio_percent: Mapped[float | None] = mapped_column(Float, nullable=True)
+    pollution_ratio_percent: Mapped[float | None] = mapped_column(Float, nullable=True)
+    pollution_threshold_percent: Mapped[float | None] = mapped_column(Float, nullable=True)
     ntcls_detail: Mapped[str | None] = mapped_column(Text, nullable=True)
     ntspe_detail: Mapped[str | None] = mapped_column(Text, nullable=True)
-    ntcls_top1_pass: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
-    ntcls_contamination_pass: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
-    ntspe_contamination_pass: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    class_filtered_path: Mapped[str | None] = mapped_column(Text, nullable=True)
+    class_filtered_paths_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    small_judged_paths_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    nt_results_json: Mapped[str | None] = mapped_column(Text, nullable=True)
     raw_json: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(
@@ -95,6 +112,29 @@ class NtResult(Base):
     case: Mapped[SurveyCase] = relationship("SurveyCase", back_populates="nt_result")
 
 
+class GcResult(Base):
+    __tablename__ = "gc_results"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    case_id: Mapped[int] = mapped_column(ForeignKey("survey_cases.id"), unique=True, index=True)
+    executed: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False, index=True)
+    status: Mapped[str | None] = mapped_column(String(32), nullable=True, index=True)
+    reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    pos_path: Mapped[str | None] = mapped_column(Text, nullable=True)
+    heavy_contamination: Mapped[bool | None] = mapped_column(Boolean, nullable=True, index=True)
+    gc_raw_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    raw_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime,
+        default=datetime.utcnow,
+        onupdate=datetime.utcnow,
+        nullable=False,
+    )
+
+    case: Mapped[SurveyCase] = relationship("SurveyCase", back_populates="gc_result")
+
+
 class SurveyResult(Base):
     __tablename__ = "survey_results"
 
@@ -103,7 +143,7 @@ class SurveyResult(Base):
     final_level: Mapped[str | None] = mapped_column(String(32), nullable=True, index=True)
     should_transfer: Mapped[str | None] = mapped_column(String(8), nullable=True, index=True)
     remark: Mapped[str | None] = mapped_column(Text, nullable=True)
-    rule_version: Mapped[str] = mapped_column(String(64), default="survey_rule_v1", nullable=False)
+    rule_version: Mapped[str] = mapped_column(String(64), default="survey_rule_v2_gc", nullable=False)
     raw_json: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(
