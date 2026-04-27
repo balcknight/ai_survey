@@ -181,16 +181,24 @@ print(data["analysis_ploidy"]["enabled"], data["warnings"])
 
 流程：
 1. 读取 NT 小类数据（核心列：`class`、`species`、`total rate`；`fq1/fq2` 不参与判定）。
-2. 根据目标物种确定所属大类（动物/植物/细菌/真菌/病毒）。
-3. 过滤掉以下记录：目标同类、细菌、真菌、病毒、人（`Homo sapiens/human/人`）。
-4. 对剩余候选记录按每批 3 条并发调用 agent（LLM）判定是否“可能/合理污染”，并给出原因。
+2. 根据目标物种确定所属大类（动物/植物/细菌/真菌/病毒）；若目标物种无法识别则直接返回 `fail`。
+3. 过滤掉以下记录：目标同类、细菌、真菌、病毒、人（`Homo sapiens/human/人`）；其余进入候选（含无法识别类别）。
+4. 对候选记录按每批 3 条并发调用 agent（LLM）判定是否“可能/合理污染”，并给出原因。
+   - 兜底策略：单批失败、单条漏返回、未完成判定时，默认按“不合理”处理，避免漏报。
 5. 输出两份文件：
    - 小类判定文件：在原始小类记录上追加 `是否合理`、`原因` 两列。
-   - 大类聚合文件：过滤掉不合理记录后，按 `class` 重聚合（`species_count`、`total_rate_sum`）。
+   - 大类聚合文件：过滤掉“合理污染”记录后，按 `class` 重聚合（保留不合理/未判定记录）。
+
+判级规则：
+- 主导大类比例：`dominant_ratio = max(Metazoa, Plantae, Bacteria, Fungi, Viruses)`。
+- 污染合计：`pollution_ratio = Bacteria + Fungi + Viruses + 合理污染占比`。
+- 阈值：当 `dominant_ratio < 20` 时阈值为 `0.4%`，否则为 `1.0%`。
+- 最终等级：`pollution_ratio > threshold` 判 `重度污染`，否则判 `正常`（等于阈值判正常）。
 
 兼容说明：
-- `judge_nt_contamination` 仍返回 `nt_score/nt_level` 等字段以兼容上层流程；
-- 同时新增 `nt_rule_version/small_judged_path/class_filtered_path` 等新字段。
+- `judge_nt_contamination` 当前返回以 `nt_level/is_heavy_contamination` 为核心，不再返回 `nt_score`。
+- 同时返回 `nt_rule_version/target_species/target_category` 及污染比例字段（如 `dominant_ratio_percent`、`pollution_ratio_percent`、`pollution_threshold_percent`）。
+- 输出路径字段包含：`small_judged_path`、`class_filtered_path`。
 
 
 
@@ -204,20 +212,51 @@ print(data["analysis_ploidy"]["enabled"], data["warnings"])
 
 ### 综合判定逻辑
 
-kmer正常时：
-| NT等级 | 综合判定 |
-|--------|---------|
-| 正常/轻度污染 | 正常 |
-| 重度污染 | 轻度污染（NT得分<=2时不建议流转） |
-| fail | NT得分>=3时轻度污染，否则重度污染 |
+1. `kmer.warnings` 非空：
+   - `survey_result.should_transfer = 转人工`
+   - `survey_result.final_level = 待人工复核`
+   - 备注：`kmer存在警告信息，转人工复核`
 
-kmer异常时：
-| NT等级 | 综合判定 |
-|--------|---------|
-| 正常 | 重度污染 |
-| 其他 | fail |
+2. `NT` 判定为 `fail`：
+   - `survey_result.should_transfer = 转人工`
+   - `survey_result.final_level = 待人工复核`
+   - 备注：`NT判定失败，无法自动识别，转人工复核`
 
-注：当前已移除“疑似多倍体”专门分支，按上述 kmer正常/异常统一处理。
+3. `kmer` 与 `NT` 判定一致（`kmer正常+NT正常` 或 `kmer异常+NT异常`）时：
+   - 按常规规则判定（见下表）
+
+4. `kmer` 与 `NT` 判定不一致（`kmer正常+NT重度污染` 或 `kmer异常+NT正常`）时：
+   - 触发 GC 判定（自动定位同目录下 `*.pos`）
+   - GC 重度污染阈值：`below/on > 0.07` 记为重度污染，否则记为正常。
+   - 若 GC 判定正常（`heavy_contamination=False`），则允许流转：
+     - `survey_result.should_transfer = 是`
+     - `survey_result.final_level = 正常`
+     - 备注：`kmer与NT判定不一致，但GC判定正常，允许流转`
+   - 若 GC 判定失败，则：
+     - `survey_result.should_transfer = 转人工`
+     - `survey_result.final_level = 待人工复核`
+   - 若 GC 判定为重度污染（`heavy_contamination=True`），则：
+     - `survey_result.should_transfer = 否`
+     - `survey_result.final_level = 重度污染`
+     - 备注：`kmer与NT判定不一致，GC判定重度污染，不流转`
+
+常规规则：
+
+| kmer是否正常 | NT等级 | 综合判定(final_level) | 是否流转(should_transfer) | 备注 |
+|-------------|--------|-----------------------|----------------------------|------|
+| 是 | 正常 | 正常 | 是 |  |
+| 是 | 重度污染 | 轻度污染 | 否 | NT判定重度污染，不建议流转 |
+| 是 | fail | 待人工复核 | 转人工 | NT判定失败，无法自动识别，转人工复核 |
+| 否 | 正常 | 重度污染 | 否 | NT正常但kmer异常，不建议流转 |
+| 否 | fail | 待人工复核 | 转人工 | NT判定失败，无法自动识别，转人工复核 |
+| 否 | 重度污染 | fail | 否 |  |
+
+说明：当前 NT 正常流程仅产出 `正常/重度污染/fail`。若出现其他异常值，按异常输入转人工复核处理。
+
+GC 判定失败的常见原因（转人工合理）：
+- 样本目录内找不到 `*.pos` 文件，或目录本身无效。
+- `.pos` 文件不存在、不可读，或读入后清洗无有效点（GC/Depth 全部无效）。
+- GC 处理中出现运行异常（如输出文件写入失败等）。
 
 ### 输出字段（单样本JSON）
 
@@ -225,7 +264,8 @@ kmer异常时：
 |------|------|
 | 原始kmer字段 | 保留 `tmp_kmer_result_with_ai.json` 中的全部字段（如 `pattern/is_normal/detail/warnings/analysis_ploidy`） |
 | target_species | 从 `all.ntcls.xls` 读取的目标物种名 |
-| nt_result | NT判定结果对象：`nt_score/nt_level/ntcls_score/ntspe_score/ntcls_detail/ntspe_detail/ntcls_top1_pass/ntcls_contamination_pass/ntspe_contamination_pass` |
+| nt_result | NT聚合判定对象：如 `nt_level/is_heavy_contamination/nt_rule_version/target_species/target_category/source_nt_count/valid_nt_count/dominant_category/dominant_ratio_percent/pollution_ratio_percent/pollution_threshold_percent/class_filtered_path/class_filtered_paths/small_judged_paths/nt_results/ntcls_detail/ntspe_detail` |
+| gc_result | GC复核结果对象：`executed/status/reason`；执行成功时额外包含 `pos_path/heavy_contamination/gc_decision/gc_global_stats/gc_artifacts/gc_raw` |
 | survey_result | 综合结果对象：`final_level/should_transfer/remark` |
 | result_metrics | 从 `*.Result.xls` 读取并修正后的结果对象：`result_path/ploidy_pattern/ploidy_multiplier/raw/adjusted/remark` |
 
@@ -236,54 +276,6 @@ kmer异常时：
 2. `result_metrics.raw` 直接保存首行原始值；`result_metrics.adjusted` 保存按倍性修正后的值。
 3. 倍性修正规则：二倍体不变；三倍体将 `Genome_size(M)` 和 `Revised_Genome_size(M)` 乘 3；四倍体乘 4；并在 `result_metrics.remark` 记录原因。
 
-
-
-### 优化逻辑
-判定结果: unknown
-是否正常: 否
-详情: 5个峰，depth=[23, 45, 90, 135, 179]，比值=1.00:1.96:3.91:5.87:7.78，不匹配已知模式
-
-当峰大于等于四个的时候，参照如下字典的判断逻辑，如果符合1:2则接着往下看（三倍体和高重复二倍体可以同步看），如果不符合就停止，直到找到最匹配的模式或者列表被裁剪完：
-
-('diploid_hetero',    [1, 2],    '杂合二倍体'),
-('triploid',          [1, 2, 3], '三倍体'),
-('high_repetitive_diplo', [1, 2, 4], '高重复二倍体'),
-('tetraploid',        [1, 2, 3, 4], '四倍体'),
-
-
-## 判定算法
-1. kmer峰型异常的结论是如何得出的
-在 kmer_judge.py:51-63 的 detect_peaks 函数中：
-
-逻辑是检查每个峰的左侧鞍部（局部最小值）与峰高度的比值：
-
-
-left_min = freq_smooth[:idx].min()   # 峰左侧所有点的最小值
-left_ratio = left_min / peak_freq    # 鞍部占峰高的比例
-abnormal_flags.append(left_ratio > 0.9)  # 超过90%标记异常
-判定逻辑：
-
-对每个检测到的峰，取其左侧（depth更小方向）平滑曲线的全局最小值 left_min
-计算 left_min / peak_freq，即左侧最低点占峰高的比例
-如果比例 > 0.9（90%），标记为异常峰型
-含义：正常的生物学峰应该是左侧有明显下降再上升到峰值的形态。如果左侧鞍部几乎和峰一样高（>90%），说明这个"峰"其实不是一个真正的凸起，可能是噪声或数据质量问题导致的假峰。
-
-注意：异常峰在合并前被过滤掉，不参与后续的峰合并和 classify_peaks 判定逻辑。
-
-2. 当前如何检测峰的宽度
-峰宽度检测在 kmer_judge.py:30-47：
-
-
-# 新版（当前实现）:
-# 从峰顶向左扫描，直到频率不再递减（找左侧局部谷底），
-# 从峰顶向右扫描，直到频率不再递减（找右侧局部谷底），
-# 宽度 = 右谷底位置 - 左谷底位置。
-# 如果宽度 >= min_width（默认15），则保留该峰；否则视为窄峰过滤。
-
-关于参数外置情况：
-
-detect_peaks 函数签名中有 min_width=15 参数
-main_dual 函数已经外置了 min_width=15（L184），并传递给 detect_peaks
 
 
 ## 相关知识 
@@ -312,27 +304,3 @@ prominence = 峰顶频率 - 基准线 = 4,706,528 - 4,527,555 ≈ 178,973
 所以 prominence 衡量的是"把这个峰淹没需要多少水"，而不是峰的绝对高度。
 
 现在把 prominence_ratio 从 0.05 降到 0.04，让 0.0486 能通过。
-
-## 迭代优化（已经实现）
-### 优化v4
-1.NT大类算所有比例的10%，而不是固定10%
-2.大类里面，改为非本类加一起小于所有比例的10%才算通过
-2.小类不再卡固定的2%，改为top1的10%（如果top1<5%，则为20%）
-
-### 优化v5
-kmer污染峰，不再卡主峰深度的25%，改为20%
-spe左边峰最低点需要低于主峰75%的位置
-除了1:2，1:3在2.7-3.3范围内也算正常的倍性模式，1:4在3.5-4.2范围内算正常的倍性模式，其他不变
-所有峰太低:最高峰频率低于最高值的20%（从深度3开始的最高点），异常
-
-
-## NT最新规则
-对于NT小类文件（几百-上千个）
-1.目标物种名仍由外部传入（默认从 `all.ntcls.xls` 第一行 `Sample name` 读取）；NT小类输入改为 `*_NT.species.xls`（找不到时兼容回退 `all.ntspe.xls`）。
-2.读取小类文件（列：`class/species/total rate`，`fq1_number(rate)/fq2_number(rate)` 不参与判定）。
-3.先按规则过滤：去掉“目标物种所属大类 + 细菌 + 真菌 + 病毒 + 人（Homo sapiens/human/人）”。
-4.对剩余候选按每批 3 条并发调用 agent（LLM）判定“是否可能/合理污染”，并返回简短原因。
-5.导出两个文件：
-   - 小类明细文件：在原始小类记录上追加两列 `是否合理`、`原因`。
-   - 大类聚合文件：仅保留 `是否合理=是` 的物种后，按大类重新聚合（`species_count`、`total_rate_sum`）。
-6.NT返回结果保留兼容字段（`nt_level/nt_score/...`）供上层流程使用，同时新增输出文件路径等新字段。

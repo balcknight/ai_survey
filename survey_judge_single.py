@@ -215,6 +215,46 @@ def _ploidy_multiplier(pattern: str) -> int | None:
     return mapping.get(pattern)
 
 
+def _has_kmer_warnings(kmer_result: dict) -> bool:
+    warnings = kmer_result.get('warnings') or []
+    return any(str(w).strip() for w in warnings)
+
+
+def _is_kmer_nt_conflict(kmer_result: dict, nt_result: dict) -> bool:
+    kmer_normal = bool(kmer_result.get('is_normal', False))
+    nt_level = nt_result.get('nt_level', 'fail')
+    return (kmer_normal and nt_level == '重度污染') or ((not kmer_normal) and nt_level == '正常')
+
+
+def _run_gc_check(sample_dir: str) -> dict[str, Any]:
+    try:
+        from gc_depth_line_judge import resolve_gc_input_file, run_gc_depth_line
+
+        gc_paths = resolve_gc_input_file(sample_dir)
+        pos_path = gc_paths['pos_path']
+        pos_stem = Path(pos_path).stem
+        out_json = str(Path(sample_dir) / f'{pos_stem}.gc_line.json')
+        out_png = str(Path(sample_dir) / f'{pos_stem}.gc_line.png')
+        gc_raw = run_gc_depth_line(pos_path=pos_path, out_json=out_json, out_png=out_png)
+        return {
+            'executed': True,
+            'status': 'ok',
+            'reason': '',
+            'pos_path': pos_path,
+            'heavy_contamination': bool(gc_raw.get('decision', {}).get('heavy_contamination', True)),
+            'gc_decision': gc_raw.get('decision'),
+            'gc_global_stats': gc_raw.get('global_stats'),
+            'gc_artifacts': gc_raw.get('artifacts'),
+            'gc_raw': gc_raw,
+        }
+    except Exception as exc:
+        return {
+            'executed': True,
+            'status': 'fail',
+            'reason': f'GC判定失败: {exc}',
+        }
+
+
 def load_and_adjust_result_metrics(result_path: str, pattern: str) -> dict:
     """读取 *.Result.xls 并按倍性规则修正基因组大小字段。"""
     required_cols = [
@@ -274,7 +314,7 @@ def load_and_adjust_result_metrics(result_path: str, pattern: str) -> dict:
     }
 
 
-def build_final_survey(kmer_result: dict, nt_result: dict) -> dict:
+def build_final_survey(kmer_result: dict, nt_result: dict, gc_result: dict[str, Any] | None = None) -> dict:
     """沿用 survey_judge_batch.py 的联合判定逻辑。"""
     kmer_normal = bool(kmer_result.get('is_normal', False))
     nt_level = nt_result.get('nt_level', 'fail')
@@ -284,6 +324,39 @@ def build_final_survey(kmer_result: dict, nt_result: dict) -> dict:
         'should_transfer': '否',
         'remark': '',
     }
+
+    if _has_kmer_warnings(kmer_result):
+        final['final_level'] = '待人工复核'
+        final['should_transfer'] = '转人工'
+        final['remark'] = 'kmer存在警告信息，转人工复核'
+        return final
+
+    if nt_level == 'fail':
+        final['final_level'] = '待人工复核'
+        final['should_transfer'] = '转人工'
+        final['remark'] = 'NT判定失败，无法自动识别，转人工复核'
+        return final
+
+    if _is_kmer_nt_conflict(kmer_result, nt_result):
+        if gc_result is None:
+            final['final_level'] = '待人工复核'
+            final['should_transfer'] = '转人工'
+            final['remark'] = 'kmer与NT判定不一致，GC未执行，转人工复核'
+            return final
+        if gc_result.get('status') != 'ok':
+            final['final_level'] = '待人工复核'
+            final['should_transfer'] = '转人工'
+            final['remark'] = gc_result.get('reason') or 'kmer与NT判定不一致，GC判定失败，转人工复核'
+            return final
+        if not bool(gc_result.get('heavy_contamination', True)):
+            final['final_level'] = '正常'
+            final['should_transfer'] = '是'
+            final['remark'] = 'kmer与NT判定不一致，但GC判定正常，允许流转'
+            return final
+        final['final_level'] = '重度污染'
+        final['should_transfer'] = '否'
+        final['remark'] = 'kmer与NT判定不一致，GC判定重度污染，不流转'
+        return final
 
     if kmer_normal:
         if nt_level == '正常':
@@ -295,18 +368,18 @@ def build_final_survey(kmer_result: dict, nt_result: dict) -> dict:
             final['should_transfer'] = '否'
             final['remark'] = 'NT判定重度污染，不建议流转'
         else:
-            final['final_level'] = 'fail'
-            final['should_transfer'] = '否'
-            final['remark'] = 'NT判定失败'
+            final['final_level'] = '待人工复核'
+            final['should_transfer'] = '转人工'
+            final['remark'] = f'NT判定结果异常({nt_level})，转人工复核'
     else:
         if nt_level == '正常':
             final['final_level'] = '重度污染'
             final['should_transfer'] = '否'
             final['remark'] = 'NT正常但kmer异常，不建议流转'
         else:
-            final['final_level'] = 'fail'
-            final['should_transfer'] = '否'
-            final['remark'] = ''
+            final['final_level'] = '待人工复核'
+            final['should_transfer'] = '转人工'
+            final['remark'] = f'NT判定结果异常({nt_level})，转人工复核'
 
     return final
 
@@ -349,13 +422,61 @@ def run_single_survey(
         target_species=target_species,
         sample_dir=sample_dir,
     )
-    survey_result = build_final_survey(result, nt_result)
+    if verbose:
+        print('=' * 60)
+        if len(selected_ntspe_paths) > 1:
+            print(
+                'NT聚合说明: 检测到多个 NT species 小类文件，'
+                '按各文件污染比例做算术平均后进行统一判定。'
+            )
+        else:
+            print('NT聚合说明: 仅检测到 1 个 NT species 小类文件，直接使用单文件判定结果。')
+        print(
+            f"  文件数: 来源={nt_result.get('source_nt_count')}，"
+            f"有效={nt_result.get('valid_nt_count')}"
+        )
+        print(f"  聚合细节: {nt_result.get('ntcls_detail')}")
+        print(f"  污染细节: {nt_result.get('ntspe_detail')}")
+        print('=' * 60)
+
+    gc_result: dict[str, Any] = {
+        'executed': False,
+        'status': 'skipped',
+        'reason': 'kmer与NT判定一致，未触发GC复核',
+    }
+    if _has_kmer_warnings(result):
+        gc_result = {
+            'executed': False,
+            'status': 'skipped',
+            'reason': 'kmer存在警告信息，按规则直接转人工，跳过GC复核',
+        }
+    elif _is_kmer_nt_conflict(result, nt_result):
+        if verbose:
+            print('=' * 60)
+            print('检测到 kmer 与 NT 判定不一致，触发 GC 复核裁决。')
+            print('=' * 60)
+        gc_result = _run_gc_check(sample_dir)
+    if verbose:
+        print('=' * 60)
+        print('GC复核说明:')
+        print(f"  executed={gc_result.get('executed')}, status={gc_result.get('status')}")
+        print(f"  reason={gc_result.get('reason')}")
+        if gc_result.get('status') == 'ok':
+            decision = gc_result.get('gc_decision') or {}
+            print(
+                f"  GC结论: heavy_contamination={gc_result.get('heavy_contamination')}, "
+                f"判定理由={decision.get('reason')}"
+            )
+        print('=' * 60)
+
+    survey_result = build_final_survey(result, nt_result, gc_result=gc_result)
     result_metrics = None
     if result_path:
         result_metrics = load_and_adjust_result_metrics(result_path, result.get('pattern', ''))
 
     result['target_species'] = target_species
     result['nt_result'] = nt_result
+    result['gc_result'] = gc_result
     result['survey_result'] = survey_result
     result['result_metrics'] = result_metrics
 
@@ -364,7 +485,7 @@ def run_single_survey(
 
 def main():
     # 只需要修改样本目录（适配 VSCode 直接运行）
-    sample_dir = 'data/to_zhurui_surey_jinxianlan/FDSW260016098-2r_DaYuanYe叶-1'
+    sample_dir = 'data/to_zhurui_surey_jinxianlan/FDSW260017063-1r_BYL叶_1'
     verbose = True
 
     paths = resolve_input_files(sample_dir)
@@ -393,10 +514,20 @@ def main():
     print('单样本联合判定完成')
     print(f"kmer峰型: {merged.get('pattern')}, 是否正常: {merged.get('is_normal')}")
     nt = merged.get('nt_result', {})
+    gc = merged.get('gc_result', {})
     survey = merged.get('survey_result', {})
     print(
         f"NT等级: {nt.get('nt_level')}, 污染合计: {nt.get('pollution_ratio_percent')}%, "
         f"阈值: {nt.get('pollution_threshold_percent')}%"
+    )
+    if nt.get('source_nt_count', 0) > 1:
+        print(
+            f"NT聚合策略: 多文件均值（来源={nt.get('source_nt_count')}，"
+            f"有效={nt.get('valid_nt_count')}）"
+        )
+    print(
+        f"GC复核: executed={gc.get('executed')}, status={gc.get('status')}, "
+        f"reason={gc.get('reason')}"
     )
     print(f"综合判定: {survey.get('final_level')}, 是否流转: {survey.get('should_transfer')}")
 

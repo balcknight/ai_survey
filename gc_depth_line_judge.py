@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import sys
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
@@ -30,6 +31,33 @@ class FitResult:
     balance: float | None
     score: float | None
     low_depth_points: int
+
+
+def _find_in_sample_dir(sample_path: Path, pattern: str) -> Path | None:
+    """仅在 sample_dir 内查找匹配文件（含子目录），不向上层目录扩展。"""
+    candidates = sorted(sample_path.glob(f"**/{pattern}"))
+    if not candidates:
+        return None
+    return candidates[0]
+
+
+def resolve_gc_input_file(sample_dir: str) -> dict[str, str]:
+    """输入样本目录，仅在该目录内自动定位 .pos 文件。"""
+    sample_path = Path(sample_dir).expanduser().resolve()
+    if not sample_path.exists() or not sample_path.is_dir():
+        raise FileNotFoundError(f"样本目录不存在或不是目录: {sample_path}")
+
+    pos_file = _find_in_sample_dir(sample_path, "*.pos")
+    if pos_file is None:
+        raise FileNotFoundError(
+            f"在目录 {sample_path} 内未找到 *.pos 文件。"
+            "请确认输入文件在该目录（或其子目录）中。"
+        )
+
+    return {
+        "sample_dir": str(sample_path),
+        "pos_path": str(pos_file),
+    }
 
 
 def gaussian_smooth_1d(arr: np.ndarray, sigma: float) -> np.ndarray:
@@ -258,7 +286,7 @@ def parse_args() -> argparse.Namespace:
 
     parser.add_argument("--low-depth-max", type=float, default=12.0, help="搜索分割线时使用的低深度上限")
     parser.add_argument("--line-eps", type=float, default=0.4, help="定义“在线上”的容忍带宽")
-    parser.add_argument("--heavy-threshold", type=float, default=0.25, help="重度污染阈值: below/on > threshold")
+    parser.add_argument("--heavy-threshold", type=float, default=0.07, help="重度污染阈值: below/on > threshold")
 
     parser.add_argument("--slope-min", type=float, default=-0.5)
     parser.add_argument("--slope-max", type=float, default=0.5)
@@ -276,21 +304,38 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def main() -> None:
-    args = parse_args()
-    pos_path = Path(args.pos).expanduser().resolve()
+def run_gc_depth_line(
+    pos_path: str | Path,
+    out_json: str | Path | None = None,
+    out_png: str | Path | None = None,
+    low_depth_max: float = 12.0,
+    line_eps: float = 0.4,
+    heavy_threshold: float = 0.07,
+    slope_min: float = -0.5,
+    slope_max: float = 0.5,
+    slope_steps: int = 401,
+    residual_bins: int = 240,
+    smooth_sigma: float = 2.0,
+    peak_min_gap_bins: int = 20,
+    min_separation: float = 0.35,
+    min_balance: float = 0.10,
+    gc_grid: float = 0.5,
+    depth_grid: float = 0.2,
+    plot_depth_max: float | None = None,
+) -> dict:
+    pos_path = Path(pos_path).expanduser().resolve()
     if not pos_path.exists():
         raise FileNotFoundError(f"输入文件不存在: {pos_path}")
 
     default_out_dir = (Path.cwd() / "outputs" / "gc_line").resolve()
-    out_json = (
-        Path(args.out_json).expanduser().resolve()
-        if args.out_json
+    out_json_path = (
+        Path(out_json).expanduser().resolve()
+        if out_json
         else default_out_dir / f"{pos_path.stem}.gc_line.json"
     )
-    out_png = (
-        Path(args.out_png).expanduser().resolve()
-        if args.out_png
+    out_png_path = (
+        Path(out_png).expanduser().resolve()
+        if out_png
         else default_out_dir / f"{pos_path.stem}.gc_line.png"
     )
 
@@ -301,25 +346,25 @@ def main() -> None:
     fit = find_split_line(
         gc=gc,
         depth=depth,
-        low_depth_max=args.low_depth_max,
-        slope_min=args.slope_min,
-        slope_max=args.slope_max,
-        slope_steps=args.slope_steps,
-        residual_bins=args.residual_bins,
-        smooth_sigma=args.smooth_sigma,
-        peak_min_gap_bins=args.peak_min_gap_bins,
-        min_separation=args.min_separation,
-        min_balance=args.min_balance,
-        side_eps=args.line_eps,
-        gc_grid=args.gc_grid,
-        depth_grid=args.depth_grid,
+        low_depth_max=low_depth_max,
+        slope_min=slope_min,
+        slope_max=slope_max,
+        slope_steps=slope_steps,
+        residual_bins=residual_bins,
+        smooth_sigma=smooth_sigma,
+        peak_min_gap_bins=peak_min_gap_bins,
+        min_separation=min_separation,
+        min_balance=min_balance,
+        side_eps=line_eps,
+        gc_grid=gc_grid,
+        depth_grid=depth_grid,
     )
 
     stats = None
     heavy = False
     if fit.exists and (fit.slope is not None) and (fit.intercept is not None):
-        stats = compute_global_stats(gc, depth, fit.slope, fit.intercept, line_eps=args.line_eps)
-        heavy = bool(stats["below_over_on_ratio"] > args.heavy_threshold)
+        stats = compute_global_stats(gc, depth, fit.slope, fit.intercept, line_eps=line_eps)
+        heavy = bool(stats["below_over_on_ratio"] > heavy_threshold)
 
     result = {
         "input": {
@@ -327,19 +372,19 @@ def main() -> None:
             "total_points_after_clean": int(gc.size),
         },
         "params": {
-            "low_depth_max": args.low_depth_max,
-            "line_eps": args.line_eps,
-            "heavy_threshold": args.heavy_threshold,
-            "slope_min": args.slope_min,
-            "slope_max": args.slope_max,
-            "slope_steps": args.slope_steps,
-            "residual_bins": args.residual_bins,
-            "smooth_sigma": args.smooth_sigma,
-            "peak_min_gap_bins": args.peak_min_gap_bins,
-            "min_separation": args.min_separation,
-            "min_balance": args.min_balance,
-            "gc_grid": args.gc_grid,
-            "depth_grid": args.depth_grid,
+            "low_depth_max": low_depth_max,
+            "line_eps": line_eps,
+            "heavy_threshold": heavy_threshold,
+            "slope_min": slope_min,
+            "slope_max": slope_max,
+            "slope_steps": slope_steps,
+            "residual_bins": residual_bins,
+            "smooth_sigma": smooth_sigma,
+            "peak_min_gap_bins": peak_min_gap_bins,
+            "min_separation": min_separation,
+            "min_balance": min_balance,
+            "gc_grid": gc_grid,
+            "depth_grid": depth_grid,
         },
         "fit": asdict(fit),
         "global_stats": stats,
@@ -349,44 +394,91 @@ def main() -> None:
                 "未找到满足双峰分割条件的直线"
                 if not fit.exists
                 else (
-                    f"below/on={stats['below_over_on_ratio']:.4f} > {args.heavy_threshold}"
+                    f"below/on={stats['below_over_on_ratio']:.4f} > {heavy_threshold}"
                     if heavy
-                    else f"below/on={stats['below_over_on_ratio']:.4f} <= {args.heavy_threshold}"
+                    else f"below/on={stats['below_over_on_ratio']:.4f} <= {heavy_threshold}"
                 )
             ),
         },
         "artifacts": {
-            "json": str(out_json),
-            "png": str(out_png),
+            "json": str(out_json_path),
+            "png": str(out_png_path),
         },
     }
 
-    out_json.parent.mkdir(parents=True, exist_ok=True)
-    with open(out_json, "w", encoding="utf-8") as f:
+    out_json_path.parent.mkdir(parents=True, exist_ok=True)
+    with open(out_json_path, "w", encoding="utf-8") as f:
         json.dump(result, f, ensure_ascii=False, indent=2)
 
     plot_title = f"GC-Depth Split Detection | {'Heavy' if heavy else 'Not Heavy'}"
     plot_gc_depth(
         gc=gc,
         depth=depth,
-        out_png=out_png,
+        out_png=out_png_path,
         fit=fit,
-        low_depth_max=args.low_depth_max,
-        line_eps=args.line_eps,
-        plot_depth_max=args.plot_depth_max,
+        low_depth_max=low_depth_max,
+        line_eps=line_eps,
+        plot_depth_max=plot_depth_max,
         title=plot_title,
     )
 
-    print(f"[OK] JSON: {out_json}")
-    print(f"[OK] PNG : {out_png}")
-    if fit.exists:
-        print(f"[FIT] y = {fit.slope:.6f} * GC + {fit.intercept:.6f}")
+    return result
+
+
+def main_cli() -> None:
+    args = parse_args()
+    result = run_gc_depth_line(
+        pos_path=args.pos,
+        out_json=args.out_json,
+        out_png=args.out_png,
+        low_depth_max=args.low_depth_max,
+        line_eps=args.line_eps,
+        heavy_threshold=args.heavy_threshold,
+        slope_min=args.slope_min,
+        slope_max=args.slope_max,
+        slope_steps=args.slope_steps,
+        residual_bins=args.residual_bins,
+        smooth_sigma=args.smooth_sigma,
+        peak_min_gap_bins=args.peak_min_gap_bins,
+        min_separation=args.min_separation,
+        min_balance=args.min_balance,
+        gc_grid=args.gc_grid,
+        depth_grid=args.depth_grid,
+        plot_depth_max=args.plot_depth_max,
+    )
+    _print_summary(result)
+
+
+def _print_summary(result: dict) -> None:
+    print(f"[OK] JSON: {result['artifacts']['json']}")
+    print(f"[OK] PNG : {result['artifacts']['png']}")
+    fit = result.get("fit", {})
+    stats = result.get("global_stats")
+    if fit.get("exists"):
+        print(f"[FIT] y = {fit['slope']:.6f} * GC + {fit['intercept']:.6f}")
     else:
         print("[FIT] 未检出可用分割线")
     if stats:
         print(f"[STAT] below={stats['line_below_count']} on={stats['line_on_count']} ratio={stats['below_over_on_ratio']:.6f}")
-        print(f"[DECISION] heavy_contamination={heavy}")
+        print(f"[DECISION] heavy_contamination={result['decision']['heavy_contamination']}")
+
+
+def main() -> None:
+    # 只需要修改样本目录（适配 VSCode 直接运行）
+    sample_dir = "data/to_zhurui_surey_jinxianlan/FDSW260016098-2r_DaYuanYe叶-1"
+    paths = resolve_gc_input_file(sample_dir)
+    print("自动定位输入文件:")
+    print(f"  .pos: {paths['pos_path']}")
+    result = run_gc_depth_line(pos_path=paths["pos_path"])
+    _print_summary(result)
+    print(json.dumps(result, ensure_ascii=False, indent=2))
 
 
 if __name__ == "__main__":
-    main()
+    # 兼容两种运行方式：
+    # 1) 直接运行（无参数）=> VSCode 单样本调试模式
+    # 2) 带参数运行（如 --pos）=> CLI 模式
+    if len(sys.argv) > 1:
+        main_cli()
+    else:
+        main()
