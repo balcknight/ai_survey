@@ -30,7 +30,9 @@ def check_required_files(sample_dir: str) -> schemas.FileCheckOut:
     spe_file = _find_first(sample_path, "*.SpeFreq.cut")
     num_file = _find_first(sample_path, "*.NumFreq.cut")
     ntcls_file = _find_first(sample_path, "all.ntcls.xls")
-    ntspe_file = _find_first(sample_path, "all.ntspe.xls")
+    ntspe_file = _find_first(sample_path, "*_NT.species.xls")
+    if ntspe_file is None:
+        ntspe_file = _find_first(sample_path, "all.ntspe.xls")
     result_file = _find_first(sample_path, "*.Result.xls")
 
     missing: list[str] = []
@@ -41,7 +43,7 @@ def check_required_files(sample_dir: str) -> schemas.FileCheckOut:
     if ntcls_file is None:
         missing.append("all.ntcls.xls")
     if ntspe_file is None:
-        missing.append("all.ntspe.xls")
+        missing.append("*_NT.species.xls 或 all.ntspe.xls")
     if result_file is None:
         missing.append("*.Result.xls")
 

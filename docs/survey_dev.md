@@ -174,29 +174,23 @@ data = enrich_kmer_result(data, species_name="锤头双髻鲨")
 print(data["analysis_ploidy"]["enabled"], data["warnings"])
 ```
 
-### NT比对规则（打分制）
-all.ntcls 大类文件，每一个样本测序reads比对到 动物、植物、细菌、真菌、病毒的比例
-all.ntspe.xls 小类文件 每一个样本测序reads比对到具体物种的比例 只取了top6
+### NT比对规则（新规则）
+输入：
+- 目标物种名由外部传入（默认由 `all.ntcls.xls` 第一行 `Sample name` 读取）。
+- 小类文件优先使用 `*_NT.species.xls`（若不存在则回退 `all.ntspe.xls`）。
 
-1.先看 all.ntcls.xls
-第一列是物种名，判断是哪一类生物（五个之一），
-1.1 先看 top1 是否为该物种所属类别：是=2分，否=0分
-1.2 非 top1 比例总和 < 所有类别比例总和的10%：是=5分，否=0分
+流程：
+1. 读取 NT 小类数据（核心列：`class`、`species`、`total rate`；`fq1/fq2` 不参与判定）。
+2. 根据目标物种确定所属大类（动物/植物/细菌/真菌/病毒）。
+3. 过滤掉以下记录：目标同类、细菌、真菌、病毒、人（`Homo sapiens/human/人`）。
+4. 对剩余候选记录按每批 3 条并发调用 agent（LLM）判定是否“可能/合理污染”，并给出原因。
+5. 输出两份文件：
+   - 小类判定文件：在原始小类记录上追加 `是否合理`、`原因` 两列。
+   - 大类聚合文件：过滤掉不合理记录后，按 `class` 重聚合（`species_count`、`total_rate_sum`）。
 
-2.再看 all.ntspe.xls
-第一列是物种名，判断是哪一类生物（五个之一），
-看 top6 中细菌+真菌+病毒比例总和是否小于动态阈值：
-- 若 top1<5%，阈值=top1的20%
-- 否则阈值=top1的10%
-满足则 +3分，否则 +0分
-
-NT打分等级：
-| 总分 | 等级 |
-|------|------|
-| <4分 | fail |
-| 4<=score<6 | 重度污染 |
-| 6<=score<8 | 轻度污染 |
-| >=8分 | 正常 |
+兼容说明：
+- `judge_nt_contamination` 仍返回 `nt_score/nt_level` 等字段以兼容上层流程；
+- 同时新增 `nt_rule_version/small_judged_path/class_filtered_path` 等新字段。
 
 
 
@@ -205,8 +199,8 @@ NT打分等级：
 1. 批量判定（Excel）：
 `conda run -n zhurui_agent python survey_judge_batch.py --max 2 --verbose`
 
-2. 单样本判定（在 kmer 结果 JSON 基础上追加 nt/survey）：
-`conda run -n zhurui_agent python survey_judge_single.py --kmer-json data/tmp_kmer_result_with_ai.json --ntcls /path/to/all.ntcls.xls --ntspe /path/to/all.ntspe.xls`
+2. 单样本判定（自动定位输入）：
+`conda run -n zhurui_agent python survey_judge_single.py`
 
 ### 综合判定逻辑
 
@@ -330,3 +324,15 @@ kmer污染峰，不再卡主峰深度的25%，改为20%
 spe左边峰最低点需要低于主峰75%的位置
 除了1:2，1:3在2.7-3.3范围内也算正常的倍性模式，1:4在3.5-4.2范围内算正常的倍性模式，其他不变
 所有峰太低:最高峰频率低于最高值的20%（从深度3开始的最高点），异常
+
+
+## NT最新规则
+对于NT小类文件（几百-上千个）
+1.目标物种名仍由外部传入（默认从 `all.ntcls.xls` 第一行 `Sample name` 读取）；NT小类输入改为 `*_NT.species.xls`（找不到时兼容回退 `all.ntspe.xls`）。
+2.读取小类文件（列：`class/species/total rate`，`fq1_number(rate)/fq2_number(rate)` 不参与判定）。
+3.先按规则过滤：去掉“目标物种所属大类 + 细菌 + 真菌 + 病毒 + 人（Homo sapiens/human/人）”。
+4.对剩余候选按每批 3 条并发调用 agent（LLM）判定“是否可能/合理污染”，并返回简短原因。
+5.导出两个文件：
+   - 小类明细文件：在原始小类记录上追加两列 `是否合理`、`原因`。
+   - 大类聚合文件：仅保留 `是否合理=是` 的物种后，按大类重新聚合（`species_count`、`total_rate_sum`）。
+6.NT返回结果保留兼容字段（`nt_level/nt_score/...`）供上层流程使用，同时新增输出文件路径等新字段。

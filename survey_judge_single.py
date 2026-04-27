@@ -4,6 +4,7 @@ Survey 单样本联合判定脚本
 """
 
 from pathlib import Path
+from typing import Any
 
 import pandas as pd
 
@@ -19,7 +20,12 @@ def _find_in_sample_dir(sample_path: Path, pattern: str) -> Path | None:
     return candidates[0]
 
 
-def resolve_input_files(sample_dir: str) -> dict[str, str]:
+def _find_all_in_sample_dir(sample_path: Path, pattern: str) -> list[Path]:
+    """仅在 sample_dir 内查找全部匹配文件（含子目录），不向上层目录扩展。"""
+    return sorted(sample_path.glob(f'**/{pattern}'))
+
+
+def resolve_input_files(sample_dir: str) -> dict[str, Any]:
     """输入样本目录，仅在该目录内自动定位 5 个输入文件路径。"""
     sample_path = Path(sample_dir).expanduser().resolve()
     if not sample_path.exists() or not sample_path.is_dir():
@@ -28,7 +34,17 @@ def resolve_input_files(sample_dir: str) -> dict[str, str]:
     spe_file = _find_in_sample_dir(sample_path, '*.SpeFreq.cut')
     num_file = _find_in_sample_dir(sample_path, '*.NumFreq.cut')
     ntcls_file = _find_in_sample_dir(sample_path, 'all.ntcls.xls')
-    ntspe_file = _find_in_sample_dir(sample_path, 'all.ntspe.xls')
+    ntcls_source = 'primary:all.ntcls.xls'
+    if ntcls_file is None:
+        ntcls_file = _find_in_sample_dir(sample_path, '*.ntcls.xls')
+        ntcls_source = 'backup:*.ntcls.xls'
+    ntspe_source = 'primary:*.species.xls'
+    ntspe_files = _find_all_in_sample_dir(sample_path, '*.species.xls')
+
+    if not ntspe_files:
+        ntspe_source = 'backup:*.species.test.xls'
+        ntspe_files = _find_all_in_sample_dir(sample_path, '*.species.test.xls')
+
     result_file = _find_in_sample_dir(sample_path, '*.Result.xls')
 
     missing = []
@@ -37,9 +53,9 @@ def resolve_input_files(sample_dir: str) -> dict[str, str]:
     if num_file is None:
         missing.append('*.NumFreq.cut')
     if ntcls_file is None:
-        missing.append('all.ntcls.xls')
-    if ntspe_file is None:
-        missing.append('all.ntspe.xls')
+        missing.append('all.ntcls.xls（备选：*.ntcls.xls）')
+    if not ntspe_files:
+        missing.append('至少一个 *.species.xls（备选：*.species.test.xls）')
     if result_file is None:
         missing.append('*.Result.xls')
 
@@ -53,15 +69,141 @@ def resolve_input_files(sample_dir: str) -> dict[str, str]:
         'spe_path': str(spe_file),
         'num_path': str(num_file),
         'ntcls_path': str(ntcls_file),
-        'ntspe_path': str(ntspe_file),
+        'ntcls_source': ntcls_source,
+        'ntspe_path': str(ntspe_files[0]),  # 兼容旧调用方
+        'ntspe_paths': [str(p) for p in ntspe_files],
+        'ntspe_source': ntspe_source,
         'result_path': str(result_file),
     }
 
 
 def load_target_species(ntcls_path: str) -> str:
-    """从 all.ntcls.xls 第一行读取目标物种名。"""
+    """从 ntcls 文件第一行读取目标物种名。"""
     df_cls = pd.read_csv(ntcls_path, sep='\t')
     return str(df_cls.iloc[0]['Sample name'])
+
+
+def _load_ntcls_meta(ntcls_path: str, target_species: str) -> tuple[str, str]:
+    sample_name = target_species
+    library_name = ''
+    try:
+        df_cls = pd.read_csv(ntcls_path, sep='\t')
+        if not df_cls.empty:
+            first = df_cls.iloc[0]
+            sample_name = str(first.get('Sample name', sample_name))
+            library_name = str(first.get('Library name', ''))
+    except Exception:
+        pass
+    return sample_name, library_name
+
+
+def _mean(values: list[float]) -> float:
+    if not values:
+        return 0.0
+    return sum(values) / len(values)
+
+
+def _fmt_cat_value(name: str, value: float) -> str:
+    ratio = f'{value:.4f}'.rstrip('0').rstrip('.')
+    if not ratio:
+        ratio = '0'
+    return f'{name}({ratio})'
+
+
+def _aggregate_nt_results(
+    nt_results: list[dict[str, Any]],
+    ntcls_path: str,
+    target_species: str,
+    sample_dir: str | None = None,
+) -> dict[str, Any]:
+    valid = [r for r in nt_results if r.get('nt_level') in ('正常', '重度污染')]
+    if not valid:
+        return {
+            'nt_level': 'fail',
+            'is_heavy_contamination': False,
+            'nt_rule_version': 'nt_rule_v3_ratio_gate_multi_avg',
+            'detail': '所有 NT 结果均失败，无法聚合',
+            'target_species': target_species,
+            'target_category': nt_results[0].get('target_category') if nt_results else None,
+            'source_nt_count': len(nt_results),
+            'valid_nt_count': 0,
+        }
+
+    metazoa = _mean([float(r.get('metazoa_ratio_percent', 0.0)) for r in valid])
+    plantae = _mean([float(r.get('plantae_ratio_percent', 0.0)) for r in valid])
+    bacteria = _mean([float(r.get('bacteria_ratio_percent', 0.0)) for r in valid])
+    fungi = _mean([float(r.get('fungi_ratio_percent', 0.0)) for r in valid])
+    viruses = _mean([float(r.get('viruses_ratio_percent', 0.0)) for r in valid])
+    reasonable = _mean([float(r.get('reasonable_contamination_ratio_percent', 0.0)) for r in valid])
+
+    class_ratio_map = {
+        'Metazoa': metazoa,
+        'Plantae': plantae,
+        'Bacteria': bacteria,
+        'Fungi': fungi,
+        'Viruses': viruses,
+    }
+    dominant_category = max(class_ratio_map, key=class_ratio_map.get)
+    dominant_ratio = class_ratio_map[dominant_category]
+    pollution_threshold = 0.4 if dominant_ratio < 20 else 1.0
+    pollution_ratio = bacteria + fungi + viruses + reasonable
+    nt_level = '重度污染' if pollution_ratio > pollution_threshold else '正常'
+    is_heavy = nt_level == '重度污染'
+
+    sample_name, library_name = _load_ntcls_meta(ntcls_path, target_species)
+    final_class_path = None
+    if sample_dir:
+        out_path = Path(sample_dir) / 'all.ntcls.xls.class.filtered.final.tsv'
+        final_df = pd.DataFrame(
+            [
+                {
+                    'Sample name': sample_name,
+                    'Library name': library_name,
+                    'First': _fmt_cat_value('Metazoa', metazoa),
+                    'Second': _fmt_cat_value('Plantae', plantae),
+                    'Third': _fmt_cat_value('Bacteria', bacteria),
+                    'Fourth': _fmt_cat_value('Fungi', fungi),
+                    'Fifth': _fmt_cat_value('Viruses', viruses),
+                }
+            ]
+        )
+        final_df.to_csv(out_path, sep='\t', index=False)
+        final_class_path = str(out_path)
+
+    return {
+        'nt_level': nt_level,
+        'is_heavy_contamination': is_heavy,
+        'nt_rule_version': 'nt_rule_v3_ratio_gate_multi_avg',
+        'target_species': target_species,
+        'target_category': valid[0].get('target_category'),
+        'source_nt_count': len(nt_results),
+        'valid_nt_count': len(valid),
+        'dominant_category': dominant_category,
+        'dominant_ratio_percent': round(dominant_ratio, 4),
+        'metazoa_ratio_percent': round(metazoa, 4),
+        'plantae_ratio_percent': round(plantae, 4),
+        'bacteria_ratio_percent': round(bacteria, 4),
+        'fungi_ratio_percent': round(fungi, 4),
+        'viruses_ratio_percent': round(viruses, 4),
+        'reasonable_contamination_ratio_percent': round(reasonable, 4),
+        'pollution_ratio_percent': round(pollution_ratio, 4),
+        'pollution_threshold_percent': round(pollution_threshold, 4),
+        'class_filtered_path': final_class_path,
+        'class_filtered_paths': [r.get('class_filtered_path') for r in nt_results if r.get('class_filtered_path')],
+        'small_judged_paths': [r.get('small_judged_path') for r in nt_results if r.get('small_judged_path')],
+        'nt_results': nt_results,
+        'ntcls_detail': (
+            f'多文件聚合: 有效={len(valid)}/{len(nt_results)}; '
+            f'主导大类={dominant_category}({dominant_ratio:.4f}%)'
+        ),
+        'ntspe_detail': (
+            f'均值污染合计=细菌({bacteria:.4f}%)'
+            f'+真菌({fungi:.4f}%)'
+            f'+病毒({viruses:.4f}%)'
+            f'+合理污染({reasonable:.4f}%)'
+            f'={pollution_ratio:.4f}%; 阈值={pollution_threshold:.4f}%'
+        ),
+    }
 
 
 def _ploidy_multiplier(pattern: str) -> int | None:
@@ -136,7 +278,6 @@ def build_final_survey(kmer_result: dict, nt_result: dict) -> dict:
     """沿用 survey_judge_batch.py 的联合判定逻辑。"""
     kmer_normal = bool(kmer_result.get('is_normal', False))
     nt_level = nt_result.get('nt_level', 'fail')
-    nt_score = nt_result.get('nt_score', 0)
 
     final = {
         'final_level': 'fail',
@@ -145,28 +286,18 @@ def build_final_survey(kmer_result: dict, nt_result: dict) -> dict:
     }
 
     if kmer_normal:
-        if nt_level in ('正常', '轻度污染'):
+        if nt_level == '正常':
             final['final_level'] = '正常'
             final['should_transfer'] = '是'
             final['remark'] = ''
         elif nt_level == '重度污染':
-            if nt_score <= 2:
-                final['final_level'] = '轻度污染'
-                final['should_transfer'] = '否'
-                final['remark'] = 'NT得分<=2分，不建议流转'
-            else:
-                final['final_level'] = '轻度污染'
-                final['should_transfer'] = '是'
-                final['remark'] = ''
+            final['final_level'] = '轻度污染'
+            final['should_transfer'] = '否'
+            final['remark'] = 'NT判定重度污染，不建议流转'
         else:
-            if nt_score >= 3:
-                final['final_level'] = '轻度污染'
-                final['should_transfer'] = '是'
-                final['remark'] = ''
-            else:
-                final['final_level'] = '重度污染'
-                final['should_transfer'] = '否'
-                final['remark'] = 'NT得分<=2分，不建议流转'
+            final['final_level'] = 'fail'
+            final['should_transfer'] = '否'
+            final['remark'] = 'NT判定失败'
     else:
         if nt_level == '正常':
             final['final_level'] = '重度污染'
@@ -184,7 +315,8 @@ def run_single_survey(
     spe_path: str,
     num_path: str,
     ntcls_path: str,
-    ntspe_path: str,
+    ntspe_path: str | None = None,
+    ntspe_paths: list[str] | None = None,
     result_path: str | None = None,
     verbose: bool = True,
 ) -> dict:
@@ -197,8 +329,26 @@ def run_single_survey(
         species_name=target_species,
         verbose=verbose
     )
-    
-    nt_result = judge_nt_contamination(ntcls_path, ntspe_path, target_species)
+
+    selected_ntspe_paths = list(ntspe_paths or [])
+    if not selected_ntspe_paths and ntspe_path:
+        selected_ntspe_paths = [ntspe_path]
+    if not selected_ntspe_paths:
+        raise ValueError('未提供 NT species 文件路径（至少一个）')
+
+    nt_each: list[dict[str, Any]] = []
+    for one_nt in selected_ntspe_paths:
+        one_res = judge_nt_contamination(ntcls_path, one_nt, target_species)
+        one_res['input_ntspe_path'] = one_nt
+        nt_each.append(one_res)
+
+    sample_dir = str(Path(ntcls_path).resolve().parent)
+    nt_result = _aggregate_nt_results(
+        nt_results=nt_each,
+        ntcls_path=ntcls_path,
+        target_species=target_species,
+        sample_dir=sample_dir,
+    )
     survey_result = build_final_survey(result, nt_result)
     result_metrics = None
     if result_path:
@@ -214,22 +364,26 @@ def run_single_survey(
 
 def main():
     # 只需要修改样本目录（适配 VSCode 直接运行）
-    sample_dir = 'data/shenshaoqi_data/survey1/X101SC2507/X101SC25070200-Z01-J002/FDSW250019884-2a_百花山C-嫩茎_1管'
+    sample_dir = 'data/to_zhurui_surey_jinxianlan/FDSW260016098-2r_DaYuanYe叶-1'
     verbose = True
 
     paths = resolve_input_files(sample_dir)
     print('自动定位输入文件:')
     print(f"  SpeFreq.cut: {paths['spe_path']}")
     print(f"  NumFreq.cut: {paths['num_path']}")
-    print(f"  all.ntcls.xls: {paths['ntcls_path']}")
-    print(f"  all.ntspe.xls: {paths['ntspe_path']}")
+    print(f"  ntcls 来源: {paths['ntcls_source']}")
+    print(f"  ntcls 文件: {paths['ntcls_path']}")
+    print(f"  NT species 来源: {paths['ntspe_source']}")
+    print(f"  NT species 文件数: {len(paths['ntspe_paths'])}")
+    for p in paths['ntspe_paths']:
+        print(f"    - {p}")
     print(f"  *.Result.xls: {paths['result_path']}")
 
     merged = run_single_survey(
         spe_path=paths['spe_path'],
         num_path=paths['num_path'],
         ntcls_path=paths['ntcls_path'],
-        ntspe_path=paths['ntspe_path'],
+        ntspe_paths=paths['ntspe_paths'],
         result_path=paths['result_path'],
         verbose=verbose,
     )
@@ -240,7 +394,10 @@ def main():
     print(f"kmer峰型: {merged.get('pattern')}, 是否正常: {merged.get('is_normal')}")
     nt = merged.get('nt_result', {})
     survey = merged.get('survey_result', {})
-    print(f"NT等级: {nt.get('nt_level')}, NT得分: {nt.get('nt_score')}")
+    print(
+        f"NT等级: {nt.get('nt_level')}, 污染合计: {nt.get('pollution_ratio_percent')}%, "
+        f"阈值: {nt.get('pollution_threshold_percent')}%"
+    )
     print(f"综合判定: {survey.get('final_level')}, 是否流转: {survey.get('should_transfer')}")
 
 

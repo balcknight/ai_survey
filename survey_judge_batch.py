@@ -64,8 +64,7 @@ def judge_sample(sample_dir, verbose=False):
     返回 dict: {
         'sample_dir', 'sample_name', 'target_species',
         'kmer_pattern', 'kmer_normal', 'kmer_detail',
-        'nt_score', 'nt_level', 'ntcls_score', 'ntspe_score',
-        'ntcls_detail', 'ntspe_detail',
+        'nt_level', 'ntcls_detail', 'ntspe_detail',
         'final_level', 'error'
     }
     """
@@ -113,63 +112,46 @@ def judge_sample(sample_dir, verbose=False):
     # NT比对判断
     try:
         nt_res = judge_nt_contamination(ntcls_path, ntspe_path, target_species)
-        result['nt_score'] = nt_res['nt_score']
         result['nt_level'] = nt_res['nt_level']
-        result['ntcls_score'] = nt_res['ntcls_score']
-        result['ntspe_score'] = nt_res['ntspe_score']
         result['ntcls_detail'] = nt_res.get('ntcls_detail', '')
         result['ntspe_detail'] = nt_res.get('ntspe_detail', '')
-        result['ntcls_top1_pass'] = nt_res.get('ntcls_top1_pass', False)
-        result['ntcls_contamination_pass'] = nt_res.get('ntcls_contamination_pass', False)
-        result['ntspe_contamination_pass'] = nt_res.get('ntspe_contamination_pass', False)
+        result['is_heavy_contamination'] = nt_res.get('is_heavy_contamination', False)
+        result['pollution_ratio_percent'] = nt_res.get('pollution_ratio_percent', None)
+        result['pollution_threshold_percent'] = nt_res.get('pollution_threshold_percent', None)
         basis_parts.append(f"NT大类: {nt_res.get('ntcls_detail', '')}")
         basis_parts.append(f"NT小类: {nt_res.get('ntspe_detail', '')}")
-        basis_parts.append(f"NT总分={nt_res['nt_score']}, 等级={nt_res['nt_level']}")
+        basis_parts.append(
+            f"NT等级={nt_res.get('nt_level')}, "
+            f"污染合计={nt_res.get('pollution_ratio_percent')}%, "
+            f"阈值={nt_res.get('pollution_threshold_percent')}%"
+        )
     except Exception as e:
-        result['nt_score'] = 0
         result['nt_level'] = 'fail'
-        result['ntcls_score'] = 0
-        result['ntspe_score'] = 0
         result['ntcls_detail'] = f'NT判断异常: {e}'
         result['ntspe_detail'] = ''
-        result['ntcls_top1_pass'] = False
-        result['ntcls_contamination_pass'] = False
-        result['ntspe_contamination_pass'] = False
+        result['is_heavy_contamination'] = False
+        result['pollution_ratio_percent'] = None
+        result['pollution_threshold_percent'] = None
         basis_parts.append(f"NT: 判断异常-{e}")
 
     # 综合判定：kmer + nt_level 联合
     kmer_normal = result.get('kmer_normal', False)
     nt_level = result.get('nt_level', 'fail')
-    nt_score = result.get('nt_score', 0)
     if kmer_normal:
-        # kmer正常
-        if nt_level in ('正常', '轻度污染'):
+        if nt_level == '正常':
             result['final_level'] = '正常'
             result['should_transfer'] = '是'
             result['remark'] = ''
         elif nt_level == '重度污染':
-            # 重度污染中，kmer正常但NT<=2分，不流转
-            if nt_score <= 2:
-                result['final_level'] = '轻度污染'
-                result['should_transfer'] = '否'
-                result['remark'] = 'NT得分<=2分，不建议流转'
-            else:
-                result['final_level'] = '轻度污染'
-                result['should_transfer'] = '是'
-                result['remark'] = ''
-        else:  # fail
-            if nt_score >= 3:
-                result['final_level'] = '轻度污染'
-                result['should_transfer'] = '是'
-                result['remark'] = ''
-            else:
-                result['final_level'] = '重度污染'
-                result['should_transfer'] = '否'
-                result['remark'] = 'NT得分<=2分，不建议流转'
+            result['final_level'] = '轻度污染'
+            result['should_transfer'] = '否'
+            result['remark'] = 'NT判定重度污染，不建议流转'
+        else:
+            result['final_level'] = 'fail'
+            result['should_transfer'] = '否'
+            result['remark'] = 'NT判定失败'
     else:
-        # kmer异常
         if nt_level == '正常':
-            # NT正常10分但kmer异常，不流转
             result['final_level'] = '重度污染'
             result['should_transfer'] = '否'
             result['remark'] = 'NT正常但kmer异常，不建议流转'
@@ -195,7 +177,10 @@ def run_all(max_samples=None, verbose=True, output_path=None):
     print(f'共 {total} 个样本待处理')
     print('=' * 60)
 
-    new_cols = ['kmer峰型', 'kmer是否正常', 'NT大类Top1判断', 'NT大类污染判断', 'NT小类污染判断', 'NT得分', 'NT等级', '综合判定', '是否流转', '判定依据', '备注']
+    new_cols = [
+        'kmer峰型', 'kmer是否正常', 'NT等级', 'NT重度污染', 'NT污染合计(%)', 'NT阈值(%)',
+        '综合判定', '是否流转', '判定依据', '备注'
+    ]
     for col in new_cols:
         df[col] = ''
 
@@ -218,18 +203,20 @@ def run_all(max_samples=None, verbose=True, output_path=None):
 
         df.at[i, 'kmer峰型'] = KMER_PATTERN_CN.get(res.get('kmer_pattern', ''), res.get('kmer_pattern', ''))
         df.at[i, 'kmer是否正常'] = '正常' if res.get('kmer_normal') else '异常'
-        df.at[i, 'NT大类Top1判断'] = 'pass' if res.get('ntcls_top1_pass') else 'fail'
-        df.at[i, 'NT大类污染判断'] = 'pass' if res.get('ntcls_contamination_pass') else 'fail'
-        df.at[i, 'NT小类污染判断'] = 'pass' if res.get('ntspe_contamination_pass') else 'fail'
-        df.at[i, 'NT得分'] = res.get('nt_score', 0)
         df.at[i, 'NT等级'] = res.get('nt_level', '')
+        df.at[i, 'NT重度污染'] = '是' if res.get('is_heavy_contamination') else '否'
+        df.at[i, 'NT污染合计(%)'] = res.get('pollution_ratio_percent', '')
+        df.at[i, 'NT阈值(%)'] = res.get('pollution_threshold_percent', '')
         df.at[i, '综合判定'] = res.get('final_level', 'fail')
         df.at[i, '是否流转'] = res.get('should_transfer', '否')
         df.at[i, '判定依据'] = res.get('basis', '')
         df.at[i, '备注'] = res.get('remark', '')
 
         kmer_str = f"{res.get('kmer_pattern','?')}({'正常' if res.get('kmer_normal') else '异常'})"
-        nt_str = f"得分={res.get('nt_score', 0)} 等级={res.get('nt_level', '?')}"
+        nt_str = (
+            f"等级={res.get('nt_level', '?')} 污染合计={res.get('pollution_ratio_percent', '?')}% "
+            f"阈值={res.get('pollution_threshold_percent', '?')}%"
+        )
         print(f'  物种: {res.get("target_species","?")}')
         print(f'  kmer={kmer_str} | NT: {nt_str} | 综合: {df.at[i, "综合判定"]}')
 
