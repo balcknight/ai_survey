@@ -285,7 +285,9 @@ curl -X DELETE "$BASE_URL/api/cases/12"
     "target_species": "手掌参",
     "kmer_result": {
       "pattern": "二倍体",
-      "is_normal": true
+      "is_normal": true,
+      "spe_main_peak_depth": 68.0,
+      "num_main_peak_depth": 70.0
     },
     "nt_result": {
       "nt_level": "fail",

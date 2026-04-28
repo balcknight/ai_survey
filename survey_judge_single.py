@@ -229,12 +229,13 @@ def _is_kmer_nt_conflict(kmer_result: dict, nt_result: dict) -> bool:
 def _run_gc_check(sample_dir: str) -> dict[str, Any]:
     try:
         from gc_depth_line_judge import resolve_gc_input_file, run_gc_depth_line
+        from backend.app.services.gc_plot import build_gc_output_paths
 
         gc_paths = resolve_gc_input_file(sample_dir)
         pos_path = gc_paths['pos_path']
-        pos_stem = Path(pos_path).stem
-        out_json = str(Path(sample_dir) / f'{pos_stem}.gc_line.json')
-        out_png = str(Path(sample_dir) / f'{pos_stem}.gc_line.png')
+        output_paths = build_gc_output_paths(sample_dir=sample_dir, pos_path=pos_path)
+        out_json = output_paths['out_json']
+        out_png = output_paths['out_png']
         gc_raw = run_gc_depth_line(pos_path=pos_path, out_json=out_json, out_png=out_png)
         decision = gc_raw.get('decision') or {}
         return {
@@ -316,6 +317,11 @@ def build_final_survey(kmer_result: dict, nt_result: dict, gc_result: dict[str, 
     """沿用 survey_judge_batch.py 的联合判定逻辑。"""
     kmer_normal = bool(kmer_result.get('is_normal', False))
     nt_level = nt_result.get('nt_level', 'fail')
+    conflict_type = None
+    if kmer_normal and nt_level == '重度污染':
+        conflict_type = 'kmer_normal_nt_heavy'
+    elif (not kmer_normal) and nt_level == '正常':
+        conflict_type = 'kmer_abnormal_nt_normal'
 
     final = {
         'final_level': 'fail',
@@ -347,6 +353,11 @@ def build_final_survey(kmer_result: dict, nt_result: dict, gc_result: dict[str, 
             final['remark'] = gc_result.get('reason') or 'kmer与NT判定不一致，GC判定失败，转人工复核'
             return final
         if not bool(gc_result.get('heavy_contamination', True)):
+            if conflict_type == 'kmer_abnormal_nt_normal':
+                final['final_level'] = '待人工复核'
+                final['should_transfer'] = '转人工'
+                final['remark'] = 'kmer异常且NT正常，GC判定正常，转人工复核'
+                return final
             final['final_level'] = '正常'
             final['should_transfer'] = '是'
             final['remark'] = 'kmer与NT判定不一致，但GC判定正常，允许流转'

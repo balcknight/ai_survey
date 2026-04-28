@@ -49,6 +49,26 @@ const gcArtifacts = computed(() => {
   return (gcRaw?.artifacts ?? null) as Record<string, unknown> | null
 })
 
+const gcPlotUrl = computed(() => {
+  const caseId = store.selectedCase?.id
+  const gc = store.selectedCase?.gc_result
+  const artifacts = gcArtifacts.value
+  const pngPath = typeof artifacts?.png === 'string' ? artifacts.png : ''
+  const updatedAt = gc?.updated_at ?? store.selectedCase?.updated_at
+  if (!caseId || !gc?.executed || gc.status !== 'ok' || !pngPath) return ''
+  const qs = new URLSearchParams({
+    t: String(updatedAt ?? ''),
+  })
+  return `${apiBase}/api/cases/${caseId}/gc-plot?${qs.toString()}`
+})
+
+const gcPlotEmptyText = computed(() => {
+  const gc = store.selectedCase?.gc_result
+  if (!gc?.executed) return '本样本未触发 GC 复核'
+  if (gc.status !== 'ok') return 'GC 复核未产出可展示图像'
+  return '暂无 GC 图'
+})
+
 const apiBase = import.meta.env.VITE_API_BASE_URL ?? 'http://192.168.20.24:8001'
 
 const spePlotUrl = computed(() => {
@@ -75,9 +95,9 @@ const numPlotUrl = computed(() => {
   return `${apiBase}/api/cases/${caseId}/kmer-plot?${qs.toString()}`
 })
 
-function openPlotPreview(kind: 'Spe' | 'Num', url: string) {
+function openPlotPreview(kind: 'Spe' | 'Num' | 'GC', url: string) {
   if (!url) return
-  plotPreviewTitle.value = `${kind} 峰图`
+  plotPreviewTitle.value = kind === 'GC' ? 'GC 图' : `${kind} 峰图`
   plotPreviewUrl.value = url
   plotPreviewVisible.value = true
 }
@@ -195,6 +215,19 @@ async function onDelete() {
             <div class="span-2"><b>gc_raw.decision:</b> {{ formatLongText(gcDecision) }}</div>
             <div class="span-2"><b>gc_raw.global_stats:</b> {{ formatLongText(gcGlobalStats) }}</div>
             <div class="span-2"><b>gc_raw.artifacts:</b> {{ formatLongText(gcArtifacts) }}</div>
+          </div>
+          <div class="gc-plot-grid">
+            <el-card shadow="never">
+              <template #header>GC 图</template>
+              <el-empty v-if="!gcPlotUrl" :description="gcPlotEmptyText" :image-size="80" />
+              <img
+                v-else
+                :src="gcPlotUrl"
+                alt="gc-plot"
+                class="kmer-plot-image"
+                @click="openPlotPreview('GC', gcPlotUrl)"
+              />
+            </el-card>
           </div>
         </el-card>
 
@@ -317,6 +350,13 @@ async function onDelete() {
   gap: 12px;
 }
 
+.gc-plot-grid {
+  margin-top: 12px;
+  display: grid;
+  grid-template-columns: minmax(280px, 1fr);
+  gap: 12px;
+}
+
 .kmer-plot-image {
   width: 100%;
   height: auto;
@@ -342,6 +382,10 @@ async function onDelete() {
   }
 
   .kmer-plot-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .gc-plot-grid {
     grid-template-columns: 1fr;
   }
 }

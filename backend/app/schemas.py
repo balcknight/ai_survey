@@ -31,6 +31,8 @@ class KmerResultIn(BaseModel):
     pattern: str | None = None
     is_normal: bool | None = None
     detail: str | None = None
+    spe_main_peak_depth: float | None = None
+    num_main_peak_depth: float | None = None
     warnings: list[str] = Field(default_factory=list)
     analysis_ploidy: AnalysisPloidy | None = None
     spe_plot_path: str | None = None
@@ -109,6 +111,8 @@ class KmerResultOut(BaseModel):
     pattern: str | None = None
     is_normal: bool | None = None
     detail: str | None = None
+    spe_main_peak_depth: float | None = None
+    num_main_peak_depth: float | None = None
     spe_peaks: PeaksData | None = None
     num_peaks: PeaksData | None = None
     warnings: list[str] = Field(default_factory=list)

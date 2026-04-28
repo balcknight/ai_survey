@@ -439,6 +439,90 @@ def classify_peaks(peak_depths, peak_freqs=None, tolerance=0.10):
     return 'diploid_hetero', True, f'{n}个峰，depth=[{depths_str}]，比值≈{ratio_str}，二倍体（其余峰未计入判定）'
 
 
+def get_main_peak_depth(peak_depths, peak_freqs):
+    """返回主峰（频率最高峰）的 depth；无有效峰时返回 None。"""
+    if peak_depths is None or peak_freqs is None:
+        return None
+    if len(peak_depths) == 0 or len(peak_freqs) == 0:
+        return None
+    idx = int(np.argmax(peak_freqs))
+    return float(peak_depths[idx])
+
+
+def is_main_peak_depth_consistent(depth_a, depth_b, tolerance_ratio=0.10):
+    """主峰 depth 一致性判断：相对差值 <= tolerance_ratio 视为一致。"""
+    if depth_a is None or depth_b is None:
+        return False
+    max_depth = max(float(depth_a), float(depth_b))
+    if max_depth <= 0:
+        return False
+    return abs(float(depth_a) - float(depth_b)) / max_depth <= float(tolerance_ratio)
+
+
+def select_pattern_peaks(peak_depths, peak_freqs, pattern, tolerance=0.10):
+    """
+    返回“当前判型实际使用到的峰集合”（按 depth 升序）。
+    若无法可靠映射，则返回全部输入峰。
+    """
+    if peak_depths is None or peak_freqs is None:
+        return np.array([], dtype=float), np.array([], dtype=float)
+
+    depths = np.array(peak_depths, dtype=float)
+    freqs = np.array(peak_freqs, dtype=float)
+    if len(depths) == 0 or len(freqs) == 0:
+        return depths, freqs
+
+    sort_idx = np.argsort(depths)
+    depths = depths[sort_idx]
+    freqs = freqs[sort_idx]
+    n = len(depths)
+    if n == 1:
+        return depths[:1], freqs[:1]
+
+    base = depths[0]
+    ratios = [d / base for d in depths]
+    pat = normalize_ploidy_pattern(pattern)
+
+    # 1:2:3 特判对应的“二倍体”
+    if pat == 'diploid' and n == 3 and _match_ratios(ratios[:3], [1, 2, 3], tolerance):
+        main_peak_freq = float(np.max(freqs))
+        third_peak_freq = float(freqs[2])
+        if third_peak_freq < main_peak_freq * 0.4:
+            return depths[:3], freqs[:3]
+
+    # 1:2:4 特判对应的“二倍体”
+    if pat == 'diploid' and n >= 3 and _match_ratios(ratios[:3], [1, 2, 4], tolerance):
+        main_peak_freq = float(np.max(freqs))
+        third_peak_freq = float(freqs[2])
+        if third_peak_freq < main_peak_freq * 0.5:
+            return depths[:3], freqs[:3]
+
+    if pat == 'triploid':
+        if n == 2 and 2.7 <= ratios[1] <= 3.3:
+            return depths[:2], freqs[:2]
+        if n >= 3 and _match_ratios(ratios[:3], [1, 2, 3], tolerance):
+            return depths[:3], freqs[:3]
+        return depths, freqs
+
+    if pat == 'tetraploid':
+        if n == 2 and 3.5 <= ratios[1] <= 4.2:
+            return depths[:2], freqs[:2]
+        if n >= 3 and _match_ratios(ratios[:3], [1, 2, 4], tolerance):
+            main_peak_freq = float(np.max(freqs))
+            third_peak_freq = float(freqs[2])
+            if third_peak_freq >= main_peak_freq * 0.5:
+                return depths[:3], freqs[:3]
+        if n >= 4 and _match_ratios(ratios[:4], [1, 2, 3, 4], tolerance):
+            return depths[:4], freqs[:4]
+        return depths, freqs
+
+    # 其他二倍体判型默认使用前两峰（与 classify_peaks 主流程一致）
+    if pat == 'diploid':
+        return depths[:2], freqs[:2]
+
+    return depths, freqs
+
+
 def _normalize_cn_pattern(pattern_cn):
     if not isinstance(pattern_cn, str):
         return '未知倍型'
@@ -639,6 +723,7 @@ def main_dual(
     spe_left_min_threshold=None,
     num_left_min_threshold=None,
     species_name=None,
+    main_peak_depth_tolerance_ratio=0.10,
 ):
     # 兼容旧参数名：spe_left_min_threshold / num_left_min_threshold
     if spe_left_min_threshold is not None:
@@ -759,6 +844,8 @@ def main_dual(
             return _attach_ploidy_analysis({
                 'spe_peaks': {'depths': list(peak_depths_spe), 'freqs': list(peak_freqs_spe)},
                 'num_peaks': {'depths': list(peak_depths_num), 'freqs': list(peak_freqs_num)},
+                'spe_main_peak_depth': None,
+                'num_main_peak_depth': None,
                 'merged_peaks': [],
                 'total_peak_count': 0,
                 'pattern': to_pattern_cn('all_peaks_too_low'),
@@ -778,6 +865,8 @@ def main_dual(
             return _attach_ploidy_analysis({
                 'spe_peaks': {'depths': list(peak_depths_spe), 'freqs': list(peak_freqs_spe)},
                 'num_peaks': {'depths': list(peak_depths_num), 'freqs': list(peak_freqs_num)},
+                'spe_main_peak_depth': None,
+                'num_main_peak_depth': None,
                 'merged_peaks': [],
                 'total_peak_count': 0,
                 'pattern': to_pattern_cn('all_peaks_too_low'),
@@ -801,6 +890,8 @@ def main_dual(
         return _attach_ploidy_analysis({
             'spe_peaks': {'depths': list(peak_depths_spe), 'freqs': list(peak_freqs_spe)},
             'num_peaks': {'depths': list(peak_depths_num), 'freqs': list(peak_freqs_num)},
+            'spe_main_peak_depth': None,
+            'num_main_peak_depth': None,
             'merged_peaks': [],
             'total_peak_count': 0,
             'pattern': to_pattern_cn('no_peak_detected'),
@@ -822,6 +913,8 @@ def main_dual(
         return _attach_ploidy_analysis({
             'spe_peaks': {'depths': list(peak_depths_spe), 'freqs': list(peak_freqs_spe)},
             'num_peaks': {'depths': list(peak_depths_num), 'freqs': list(peak_freqs_num)},
+            'spe_main_peak_depth': None,
+            'num_main_peak_depth': None,
             'merged_peaks': [],
             'total_peak_count': 0,
             'pattern': to_pattern_cn('peak_shape_abnormal'),
@@ -835,6 +928,40 @@ def main_dual(
     num_pattern, num_is_normal, num_detail = classify_peaks(peak_depths_num_f, peak_freqs_num_f, tolerance)
     spe_pattern_norm = normalize_ploidy_pattern(spe_pattern)
     num_pattern_norm = normalize_ploidy_pattern(num_pattern)
+
+    # 主峰按“判型使用峰集合”计算：避免被未参与判型的高频峰误导
+    spe_used_depths, spe_used_freqs = select_pattern_peaks(
+        peak_depths_spe_f, peak_freqs_spe_f, spe_pattern, tolerance
+    )
+    num_used_depths, num_used_freqs = select_pattern_peaks(
+        peak_depths_num_f, peak_freqs_num_f, num_pattern, tolerance
+    )
+    spe_main_peak_depth = get_main_peak_depth(spe_used_depths, spe_used_freqs)
+    num_main_peak_depth = get_main_peak_depth(num_used_depths, num_used_freqs)
+
+    # 只要任意一份“判型未使用全部检测峰”，且两份均判定正常，即触发主峰一致性检查
+    spe_not_using_all_detected_peaks = len(spe_used_depths) < len(peak_depths_spe)
+    num_not_using_all_detected_peaks = len(num_used_depths) < len(peak_depths_num)
+    if (
+        (spe_not_using_all_detected_peaks or num_not_using_all_detected_peaks)
+        and spe_is_normal
+        and num_is_normal
+        and spe_main_peak_depth is not None
+        and num_main_peak_depth is not None
+        and not is_main_peak_depth_consistent(
+            spe_main_peak_depth,
+            num_main_peak_depth,
+            tolerance_ratio=main_peak_depth_tolerance_ratio,
+        )
+    ):
+        main_peak_warning = (
+            f"SpeFreq 与 NumFreq 主峰位置不一致（SpeFreq={spe_main_peak_depth:.0f}, "
+            f"NumFreq={num_main_peak_depth:.0f}, 容忍度={main_peak_depth_tolerance_ratio:.0%}），建议人工复核"
+        )
+        warnings.append(main_peak_warning)
+        if verbose:
+            print("\n警告信息:")
+            print(f"  - {main_peak_warning}")
 
     if spe_pattern_norm != num_pattern_norm:
         inconsistency_warning = (
@@ -864,6 +991,8 @@ def main_dual(
         return _attach_ploidy_analysis({
             'spe_peaks': {'depths': list(peak_depths_spe), 'freqs': list(peak_freqs_spe)},
             'num_peaks': {'depths': list(peak_depths_num), 'freqs': list(peak_freqs_num)},
+            'spe_main_peak_depth': spe_main_peak_depth,
+            'num_main_peak_depth': num_main_peak_depth,
             'merged_peaks': [],
             'total_peak_count': 0,
             'pattern': pattern_cn,
@@ -885,6 +1014,8 @@ def main_dual(
     return _attach_ploidy_analysis({
         'spe_peaks': {'depths': list(peak_depths_spe), 'freqs': list(peak_freqs_spe)},
         'num_peaks': {'depths': list(peak_depths_num), 'freqs': list(peak_freqs_num)},
+        'spe_main_peak_depth': spe_main_peak_depth,
+        'num_main_peak_depth': num_main_peak_depth,
         'merged_peaks': [],
         'total_peak_count': 0,
         'pattern': pattern_cn,
@@ -900,9 +1031,11 @@ if __name__ == '__main__':
         #    左侧鞍部干掉 base_path = '/data/work/zhurui/survey_rec/data/shenshaoqi_data/survey1/X101SC2511/X101SC25114474-Z02-J002/FDSW250056744-1r_1/1.17merFreq'
 
 
-    base_path = 'data/shenshaoqi_data/survey1/X101SC2504/X101SC25044013-Z02-J010/FDSW250009809-1a_17SPZ_DNA/17SPZ_DNA.17merFreq'
-    main_dual(
+    base_path = '/data/work/zhurui/survey_rec/data/to_zhurui_surey_jinxianlan/FDSW260016098-2r_DaYuanYe叶-1/DaYuanYe叶-1.17merFreq'
+    res = main_dual(
         spe_filepath=f'{base_path}.SpeFreq.cut',
         num_filepath=f'{base_path}.NumFreq.cut',
         use_smoothing=True
     )
+    print("\n最终结果:")
+    print(res)

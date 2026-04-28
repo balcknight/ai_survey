@@ -168,6 +168,8 @@ def import_case_from_survey_json(
             pattern=payload.get("pattern"),
             is_normal=payload.get("is_normal"),
             detail=payload.get("detail"),
+            spe_main_peak_depth=payload.get("spe_main_peak_depth"),
+            num_main_peak_depth=payload.get("num_main_peak_depth"),
             warnings=payload.get("warnings", []),
             analysis_ploidy=(
                 schemas.AnalysisPloidy(**payload.get("analysis_ploidy", {}))
@@ -371,10 +373,13 @@ def to_case_detail_out(obj: models.SurveyCase) -> schemas.CaseDetailOut:
     result_metrics_out = None
 
     if obj.kmer_result:
+        kmer_raw = from_json_text(obj.kmer_result.raw_json, {}) or {}
         kmer_out = schemas.KmerResultOut(
             pattern=obj.kmer_result.pattern,
             is_normal=obj.kmer_result.is_normal,
             detail=obj.kmer_result.detail,
+            spe_main_peak_depth=kmer_raw.get("spe_main_peak_depth"),
+            num_main_peak_depth=kmer_raw.get("num_main_peak_depth"),
             spe_peaks=schemas.PeaksData(
                 depths=from_json_text(obj.kmer_result.spe_depths_json, []),
                 freqs=from_json_text(obj.kmer_result.spe_freqs_json, []),

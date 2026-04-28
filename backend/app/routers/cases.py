@@ -8,6 +8,8 @@ from sqlalchemy.orm import Session
 
 from .. import crud, schemas
 from ..db import get_db
+from ..json_utils import from_json_text
+from ..services.gc_plot import GC_PLOT_ROOT, cleanup_gc_outputs
 from ..services.kmer_plot import KMER_PLOT_ROOT, cleanup_kmer_plots, generate_kmer_plots
 from ..services.survey_runner import (
     check_required_files,
@@ -54,6 +56,8 @@ def _to_kmer_input(kmer_result: dict) -> schemas.KmerResultIn:
         pattern=kmer_result.get("pattern"),
         is_normal=kmer_result.get("is_normal"),
         detail=kmer_result.get("detail"),
+        spe_main_peak_depth=kmer_result.get("spe_main_peak_depth"),
+        num_main_peak_depth=kmer_result.get("num_main_peak_depth"),
         warnings=kmer_result.get("warnings", []),
         analysis_ploidy=(
             schemas.AnalysisPloidy(**kmer_result.get("analysis_ploidy", {}))
@@ -195,6 +199,31 @@ def get_kmer_plot(
         path.relative_to(KMER_PLOT_ROOT)
     except ValueError as exc:
         raise HTTPException(status_code=403, detail="峰图路径不在受管目录，拒绝访问") from exc
+
+    return FileResponse(str(path), media_type="image/png", filename=path.name)
+
+
+@router.get("/{case_id}/gc-plot")
+def get_gc_plot(case_id: int, db: Session = Depends(get_db)):
+    obj = crud.get_case_detail(db, case_id)
+    if obj is None:
+        raise HTTPException(status_code=404, detail="样本不存在")
+    if obj.gc_result is None:
+        raise HTTPException(status_code=404, detail="该样本暂无GC结果")
+
+    gc_raw = from_json_text(obj.gc_result.gc_raw_json, None)
+    artifacts = gc_raw.get("artifacts") if isinstance(gc_raw, dict) else None
+    plot_path = artifacts.get("png") if isinstance(artifacts, dict) else None
+    if not isinstance(plot_path, str) or not plot_path.strip():
+        raise HTTPException(status_code=404, detail="该样本暂无GC图")
+
+    path = Path(plot_path).expanduser().resolve()
+    if not path.exists() or not path.is_file():
+        raise HTTPException(status_code=404, detail="GC图文件不存在")
+    try:
+        path.relative_to(GC_PLOT_ROOT)
+    except ValueError as exc:
+        raise HTTPException(status_code=403, detail="GC图路径不在受管目录，拒绝访问") from exc
 
     return FileResponse(str(path), media_type="image/png", filename=path.name)
 
@@ -462,17 +491,23 @@ def delete_case(case_id: int, db: Session = Depends(get_db)):
     if existing is None:
         raise HTTPException(status_code=404, detail="样本不存在")
 
-    cleanup_result = cleanup_kmer_plots(
+    gc_artifacts = from_json_text(existing.gc_result.gc_raw_json, None) if existing.gc_result else None
+    gc_artifacts = gc_artifacts.get("artifacts") if isinstance(gc_artifacts, dict) else None
+    gc_plot_path = gc_artifacts.get("png") if isinstance(gc_artifacts, dict) else None
+    gc_json_path = gc_artifacts.get("json") if isinstance(gc_artifacts, dict) else None
+
+    kmer_cleanup_result = cleanup_kmer_plots(
         [
             existing.kmer_result.spe_plot_path if existing.kmer_result else None,
             existing.kmer_result.num_plot_path if existing.kmer_result else None,
         ]
     )
+    gc_cleanup_result = cleanup_gc_outputs([gc_plot_path, gc_json_path])
     crud.delete_case(db, case_id)
 
-    deleted_files = int(cleanup_result.get("deleted_files", 0))
-    ignored_paths = list(cleanup_result.get("ignored_paths", []))
-    message = f"样本记录已删除，已同步清理峰图 {deleted_files} 个文件"
+    deleted_files = int(kmer_cleanup_result.get("deleted_files", 0)) + int(gc_cleanup_result.get("deleted_files", 0))
+    ignored_paths = list(kmer_cleanup_result.get("ignored_paths", [])) + list(gc_cleanup_result.get("ignored_paths", []))
+    message = f"样本记录已删除，已同步清理峰图/GC图 {deleted_files} 个文件"
     if ignored_paths:
         message += f"（忽略 {len(ignored_paths)} 个非受管路径）"
     return schemas.DeleteCaseOut(

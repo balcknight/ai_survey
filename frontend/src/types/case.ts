@@ -81,6 +81,8 @@ export interface CaseDetail
     pos_path: string | null
     heavy_contamination: boolean | null
     gc_raw: Record<string, unknown> | null
+    created_at?: string | null
+    updated_at?: string | null
   } | null
   survey_result: {
     final_level: string | null

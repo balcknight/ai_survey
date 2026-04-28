@@ -103,6 +103,10 @@ window 越大 → 截止更低 → 越”糊” → 小结构更容易消失（�
    - 二倍体统一输出“二倍体”，不再区分纯合/杂合/高重复二倍体。
 5. 结果一致性：
    - SpeFreq 与 NumFreq 倍型结果不一致时，加入 warning，提示“建议人工复核”。
+   - 只要 SpeFreq 或 NumFreq 任意一份“最终判型未使用全部检测峰”，且两者均判定为正常时，就检查主峰位置一致性。
+   - 主峰以“最终判型实际使用到的峰集合”计算（例如判型使用 1:2:4 的前三峰时，主峰在这三峰中取频率最高者）。
+   - 主峰比较支持容忍度（默认 10%）：相对差值 `abs(a-b)/max(a,b) <= 10%` 视为一致（如 135 与 140 视为一致）。
+   - 若超出容忍度则加入 warning，提示“建议人工复核”。
 6. 其他情况：按常规比值判定规则处理（每个文件独立判定后再汇总）。
 7. 入口函数：`main_dual(spe_filepath, num_filepath, ...)`
 
@@ -228,17 +232,27 @@ print(data["analysis_ploidy"]["enabled"], data["warnings"])
 4. `kmer` 与 `NT` 判定不一致（`kmer正常+NT重度污染` 或 `kmer异常+NT正常`）时：
    - 触发 GC 判定（自动定位同目录下 `*.pos`）
    - GC 重度污染阈值：`below/on > 0.07` 记为重度污染，否则记为正常。
-   - 若 GC 判定正常（`heavy_contamination=False`），则允许流转：
-     - `survey_result.should_transfer = 是`
-     - `survey_result.final_level = 正常`
-     - 备注：`kmer与NT判定不一致，但GC判定正常，允许流转`
    - 若 GC 判定失败，则：
      - `survey_result.should_transfer = 转人工`
      - `survey_result.final_level = 待人工复核`
-   - 若 GC 判定为重度污染（`heavy_contamination=True`），则：
-     - `survey_result.should_transfer = 否`
-     - `survey_result.final_level = 重度污染`
-     - 备注：`kmer与NT判定不一致，GC判定重度污染，不流转`
+   - 若冲突为 `kmer正常+NT重度污染`：
+     - GC 判定正常（`heavy_contamination=False`）时允许流转：
+       - `survey_result.should_transfer = 是`
+       - `survey_result.final_level = 正常`
+       - 备注：`kmer与NT判定不一致，但GC判定正常，允许流转`
+     - GC 判定为重度污染（`heavy_contamination=True`）时不流转：
+       - `survey_result.should_transfer = 否`
+       - `survey_result.final_level = 重度污染`
+       - 备注：`kmer与NT判定不一致，GC判定重度污染，不流转`
+   - 若冲突为 `kmer异常+NT正常`：
+     - GC 判定正常（`heavy_contamination=False`）时转人工：
+       - `survey_result.should_transfer = 转人工`
+       - `survey_result.final_level = 待人工复核`
+       - 备注：`kmer异常且NT正常，GC判定正常，转人工复核`
+     - GC 判定为重度污染（`heavy_contamination=True`）时不流转：
+       - `survey_result.should_transfer = 否`
+       - `survey_result.final_level = 重度污染`
+       - 备注：`kmer与NT判定不一致，GC判定重度污染，不流转`
 
 常规规则：
 
@@ -263,6 +277,7 @@ GC 判定失败的常见原因（转人工合理）：
 | 字段 | 说明 |
 |------|------|
 | 原始kmer字段 | 保留 `tmp_kmer_result_with_ai.json` 中的全部字段（如 `pattern/is_normal/detail/warnings/analysis_ploidy`） |
+| spe_main_peak_depth / num_main_peak_depth | SpeFreq/NumFreq 各自主峰深度（按最终判型使用峰计算） |
 | target_species | 从 `all.ntcls.xls` 读取的目标物种名 |
 | nt_result | NT聚合判定对象：如 `nt_level/is_heavy_contamination/nt_rule_version/target_species/target_category/source_nt_count/valid_nt_count/dominant_category/dominant_ratio_percent/pollution_ratio_percent/pollution_threshold_percent/class_filtered_path/class_filtered_paths/small_judged_paths/nt_results/ntcls_detail/ntspe_detail` |
 | gc_result | GC复核结果对象：`executed/status/reason`；执行成功时额外包含 `pos_path/heavy_contamination/gc_raw`（详细判定位于 `gc_raw.decision/global_stats/artifacts`） |
