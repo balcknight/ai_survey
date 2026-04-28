@@ -4,6 +4,7 @@ from pathlib import Path
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from sqlalchemy import text
 
 from .db import Base, engine
 from .routers.cases import router as cases_router
@@ -28,6 +29,24 @@ def init_db():
     db_path = Path("data/survey_backend.sqlite3")
     db_path.parent.mkdir(parents=True, exist_ok=True)
     Base.metadata.create_all(bind=engine)
+    _ensure_case_columns()
+
+
+def _ensure_case_columns() -> None:
+    required_columns = {
+        "stage_code": "VARCHAR(64)",
+        "contact_name": "VARCHAR(128)",
+        "contact_email": "VARCHAR(255)",
+        "cc_emails_json": "TEXT",
+        "archive_path": "TEXT",
+    }
+    with engine.begin() as conn:
+        rows = conn.execute(text("PRAGMA table_info(survey_cases)")).fetchall()
+        existing = {str(r[1]) for r in rows}
+        for col, ddl in required_columns.items():
+            if col in existing:
+                continue
+            conn.execute(text(f"ALTER TABLE survey_cases ADD COLUMN {col} {ddl}"))
 
 
 @app.on_event("startup")

@@ -12,6 +12,10 @@
 - `sample_code` 样本编号（可选；未传时默认取 `sample_dir` 最后一级目录名）
 - `target_species` 目标物种
 - `source_path` 来源路径
+- `stage_code` 分期编号（外部接口传入）
+- `contact_name` / `contact_email` 联系人信息（外部接口传入）
+- `cc_emails_json` 抄送邮箱列表（JSON）
+- `archive_path` 原始上传压缩包本地路径
 - `status`（`created|kmer_done|nt_done|judged|failed`）
 - `final_level`（冗余，便于筛选）
 - `should_transfer`（冗余，便于筛选）
@@ -62,6 +66,7 @@
 - `POST /api/cases/run-survey` 输入样本目录，执行 `survey_judge_single.py` 同款完整判定（kmer+nt+survey+result）并入库
 - `POST /api/cases/rerun-survey` 显式确认后重跑并覆盖该路径的已有记录
 - `POST /api/cases/run-by-path` 输入样本目录，自动检查 5 个必需文件；若齐全则执行完整 survey 判定并入库
+- `POST /api/cases/run-by-archive` 外部上传 `.zip` 压缩包，服务端落盘并解压后执行完整 survey 判定并入库
 
 ## 通用测试前缀
 ```bash
@@ -238,10 +243,32 @@ curl -X POST "$BASE_URL/api/cases/rerun-survey" \
   }"
 ```
 
-## 执行类接口返回说明（run-kmer/run-nt/run-survey/run-by-path/rerun-survey）
+## 7) run-by-archive（外部上传压缩包）
+### 请求参数（`multipart/form-data`）
+- `archive`：`.zip` 压缩包
+- `stage_code`：分期编号
+- `sample_name`：样本名称（核酸编号）
+- `contact`：JSON 字符串，格式 `{"name":"...","email":"..."}`
+- `cc_emails`：可选，JSON 数组字符串或逗号分隔邮箱串
+- `verbose`：可选，默认 `true`
+
+### curl 示例
+```bash
+ZIP_PATH="/tmp/survey_external_test.zip"
+curl -X POST "$BASE_URL/api/cases/run-by-archive" \
+  -F "archive=@${ZIP_PATH};type=application/zip" \
+  -F "stage_code=P1" \
+  -F "sample_name=FDSW260016086-2r" \
+  -F 'contact={"name":"测试生信","email":"bio@example.com"}' \
+  -F 'cc_emails=["ops@example.com","qa@example.com"]' \
+  -F "verbose=false"
+```
+
+## 执行类接口返回说明（run-kmer/run-nt/run-survey/run-by-path/rerun-survey/run-by-archive）
 - `run-kmer` 依赖 `file_check.kmer_complete=true`。
 - `run-nt` 依赖 `file_check.nt_complete=true`。
 - `run-survey/run-by-path` 依赖 `file_check.complete=true`（即同时具备 `*.SpeFreq.cut/*.NumFreq.cut/all.ntcls.xls/all.ntspe.xls/*.Result.xls`）。
+- `run-by-archive` 会将压缩包保存到 `data/external_uploads/`，解压后再执行与 `run-by-path` 一致的完整判定逻辑。
 - 条件不满足时：`executed=false`，仅返回缺失项。
 - `run-kmer/run-nt/run-survey/run-by-path` 都会先检查 `sample_dir` 是否已存在历史记录；若已存在，返回 `409`。
 - `rerun-survey` 用于显式覆盖重跑：`confirm=true` 且路径已存在时才执行。

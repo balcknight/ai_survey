@@ -119,6 +119,11 @@ def create_case(db: Session, payload: schemas.CaseCreate) -> models.SurveyCase:
         sample_code=payload.sample_code,
         target_species=payload.target_species,
         source_path=payload.source_path,
+        stage_code=payload.stage_code,
+        contact_name=payload.contact_name,
+        contact_email=payload.contact_email,
+        cc_emails_json=to_json_text(payload.cc_emails),
+        archive_path=payload.archive_path,
         status=payload.status,
         remark=payload.remark,
     )
@@ -152,6 +157,11 @@ def import_case_from_survey_json(
     sample_code: str | None,
     source_path: str | None,
     payload: dict,
+    stage_code: str | None = None,
+    contact_name: str | None = None,
+    contact_email: str | None = None,
+    cc_emails: list[str] | None = None,
+    archive_path: str | None = None,
 ) -> models.SurveyCase:
     target_species = payload.get("target_species")
     if not target_species:
@@ -161,6 +171,11 @@ def import_case_from_survey_json(
         sample_code=sample_code,
         target_species=target_species,
         source_path=source_path,
+        stage_code=stage_code,
+        contact_name=contact_name,
+        contact_email=contact_email,
+        cc_emails=list(cc_emails or []),
+        archive_path=archive_path,
         status="created",
         kmer_result=schemas.KmerResultIn(
             spe_peaks=schemas.PeaksData(**payload.get("spe_peaks", {})),
@@ -463,6 +478,11 @@ def to_case_detail_out(obj: models.SurveyCase) -> schemas.CaseDetailOut:
         sample_code=obj.sample_code,
         target_species=obj.target_species,
         source_path=obj.source_path,
+        stage_code=obj.stage_code,
+        contact_name=obj.contact_name,
+        contact_email=obj.contact_email,
+        cc_emails=from_json_text(obj.cc_emails_json, []),
+        archive_path=obj.archive_path,
         status=obj.status,
         final_level=obj.final_level,
         should_transfer=obj.should_transfer,

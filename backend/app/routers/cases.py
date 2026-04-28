@@ -1,8 +1,13 @@
 from __future__ import annotations
 
+import json
+import shutil
+import uuid
+import zipfile
+from datetime import datetime
 from pathlib import Path
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
 from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
 
@@ -20,10 +25,29 @@ from ..services.survey_runner import (
 )
 
 router = APIRouter(prefix="/api/cases", tags=["cases"])
+EXTERNAL_UPLOAD_ROOT = Path("data/external_uploads").resolve()
 
 
 def _normalize_sample_dir(sample_dir: str) -> str:
     return str(Path(sample_dir).expanduser().resolve())
+
+
+def _safe_extract_zip(zip_path: Path, extract_dir: Path) -> None:
+    with zipfile.ZipFile(zip_path, "r") as zf:
+        for member in zf.infolist():
+            member_path = extract_dir / member.filename
+            resolved = member_path.resolve()
+            if extract_dir != resolved and extract_dir not in resolved.parents:
+                raise ValueError(f"压缩包包含非法路径: {member.filename}")
+        zf.extractall(extract_dir)
+
+
+def _resolve_extracted_sample_dir(extract_dir: Path) -> Path:
+    entries = [p for p in extract_dir.iterdir() if p.name != "__MACOSX"]
+    dirs = [p for p in entries if p.is_dir()]
+    if len(dirs) == 1 and not any(p.is_file() for p in entries):
+        return dirs[0]
+    return extract_dir
 
 
 def _resolve_sample_code(sample_code: str | None, normalized_dir: str) -> str | None:
@@ -146,6 +170,27 @@ def _to_result_metrics_input(result_metrics: dict) -> schemas.ResultMetricsIn:
     )
 
 
+def _parse_contact_json(contact_json: str) -> schemas.ContactInfo:
+    try:
+        raw = json.loads(contact_json)
+        return schemas.ContactInfo(**raw)
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail="contact 必须是合法 JSON，格式: {\"name\":\"...\",\"email\":\"...\"}") from exc
+
+
+def _parse_cc_emails(cc_emails_text: str | None) -> list[str]:
+    if cc_emails_text is None or not cc_emails_text.strip():
+        return []
+    text = cc_emails_text.strip()
+    try:
+        parsed = json.loads(text)
+        if isinstance(parsed, list):
+            return [str(i).strip() for i in parsed if str(i).strip()]
+    except Exception:
+        pass
+    return [i.strip() for i in text.split(",") if i.strip()]
+
+
 @router.get("", response_model=list[schemas.CaseSummaryOut])
 def list_cases(
     db: Session = Depends(get_db),
@@ -263,6 +308,100 @@ def run_by_path(payload: schemas.RunByPathIn, db: Session = Depends(get_db)):
         file_check=file_check,
         executed=True,
         message="文件齐全，已完成survey判定并入库",
+        case_id=detail_obj.id,
+        case_detail=crud.to_case_detail_out(detail_obj),
+    )
+
+
+@router.post("/run-by-archive", response_model=schemas.ExternalRunByArchiveOut)
+async def run_by_archive(
+    archive: UploadFile = File(...),
+    stage_code: str = Form(...),
+    sample_name: str = Form(...),
+    contact: str = Form(...),
+    cc_emails: str | None = Form(None),
+    verbose: bool = Form(True),
+    db: Session = Depends(get_db),
+):
+    filename = (archive.filename or "").strip()
+    if not filename.lower().endswith(".zip"):
+        raise HTTPException(status_code=400, detail="仅支持 .zip 压缩包")
+
+    contact_info = _parse_contact_json(contact)
+    cc_email_list = _parse_cc_emails(cc_emails)
+
+    date_seg = datetime.now().strftime("%Y%m%d")
+    task_id = uuid.uuid4().hex[:12]
+    safe_sample = "".join(c if c.isalnum() or c in ("-", "_") else "_" for c in sample_name.strip()) or "sample"
+    root_dir = (EXTERNAL_UPLOAD_ROOT / date_seg / f"{safe_sample}_{task_id}").resolve()
+    extract_dir = (root_dir / "extracted").resolve()
+    archive_path = (root_dir / "upload.zip").resolve()
+
+    try:
+        extract_dir.mkdir(parents=True, exist_ok=True)
+        with archive_path.open("wb") as f:
+            while True:
+                chunk = await archive.read(1024 * 1024)
+                if not chunk:
+                    break
+                f.write(chunk)
+        await archive.close()
+        _safe_extract_zip(archive_path, extract_dir)
+    except zipfile.BadZipFile as exc:
+        shutil.rmtree(root_dir, ignore_errors=True)
+        raise HTTPException(status_code=400, detail="压缩包格式错误，无法解压") from exc
+    except Exception as exc:
+        shutil.rmtree(root_dir, ignore_errors=True)
+        raise HTTPException(status_code=500, detail=f"保存或解压压缩包失败: {exc}") from exc
+
+    sample_dir = _resolve_extracted_sample_dir(extract_dir).resolve()
+    normalized_dir = str(sample_dir)
+    _guard_duplicate_source_path(db, normalized_dir, case_id=None)
+    file_check = check_required_files(normalized_dir)
+    if not file_check.complete:
+        return schemas.ExternalRunByArchiveOut(
+            sample_dir=normalized_dir,
+            archive_path=str(archive_path),
+            stage_code=stage_code,
+            sample_name=sample_name,
+            contact=contact_info,
+            cc_emails=cc_email_list,
+            file_check=file_check,
+            executed=False,
+            message=f"输入文件不完整，缺失: {', '.join(file_check.missing)}",
+        )
+
+    try:
+        merged = run_survey_by_paths(file_check=file_check, verbose=verbose)
+        merged = _attach_kmer_plots(merged, file_check, normalized_dir)
+        obj = crud.import_case_from_survey_json(
+            db=db,
+            sample_code=sample_name.strip() or None,
+            source_path=normalized_dir,
+            payload=merged,
+            stage_code=stage_code,
+            contact_name=contact_info.name,
+            contact_email=contact_info.email,
+            cc_emails=cc_email_list,
+            archive_path=str(archive_path),
+        )
+        detail_obj = crud.get_case_detail(db, obj.id)
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"执行survey判定失败: {exc}") from exc
+
+    if detail_obj is None:
+        raise HTTPException(status_code=500, detail="执行后读取样本失败")
+
+    return schemas.ExternalRunByArchiveOut(
+        sample_dir=normalized_dir,
+        archive_path=str(archive_path),
+        stage_code=stage_code,
+        sample_name=sample_name,
+        contact=contact_info,
+        cc_emails=cc_email_list,
+        file_check=file_check,
+        executed=True,
+        message="压缩包文件齐全，已完成survey判定并入库",
         case_id=detail_obj.id,
         case_detail=crud.to_case_detail_out(detail_obj),
     )

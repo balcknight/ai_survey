@@ -98,6 +98,11 @@ class CaseCreate(BaseModel):
     sample_code: str | None = None
     target_species: str
     source_path: str | None = None
+    stage_code: str | None = None
+    contact_name: str | None = None
+    contact_email: str | None = None
+    cc_emails: list[str] = Field(default_factory=list)
+    archive_path: str | None = None
     status: str = "created"
     remark: str | None = None
     kmer_result: KmerResultIn | None = None
@@ -203,6 +208,11 @@ class CaseDetailOut(BaseModel):
     sample_code: str | None = None
     target_species: str
     source_path: str | None = None
+    stage_code: str | None = None
+    contact_name: str | None = None
+    contact_email: str | None = None
+    cc_emails: list[str] = Field(default_factory=list)
+    archive_path: str | None = None
     status: str
     final_level: str | None = None
     should_transfer: str | None = None
@@ -239,6 +249,25 @@ class RunByPathIn(BaseModel):
 
 class RunByPathOut(BaseModel):
     sample_dir: str
+    file_check: FileCheckOut
+    executed: bool = False
+    message: str
+    case_id: int | None = None
+    case_detail: CaseDetailOut | None = None
+
+
+class ContactInfo(BaseModel):
+    name: str
+    email: str
+
+
+class ExternalRunByArchiveOut(BaseModel):
+    sample_dir: str
+    archive_path: str
+    stage_code: str
+    sample_name: str
+    contact: ContactInfo
+    cc_emails: list[str] = Field(default_factory=list)
     file_check: FileCheckOut
     executed: bool = False
     message: str
