@@ -60,6 +60,8 @@
 - `GET /api/cases` 列表查询（`limit/offset/target_species/final_level/should_transfer/status`）
 - `GET /api/cases/{case_id}` 样本详情
 - `GET /api/cases/{case_id}/kmer-plot?spectrum=spe|num` 获取 kmer 峰图（PNG）
+- `GET /api/cases/{case_id}/gc-plot` 获取 GC 图（PNG，始终尝试生成并展示）
+- `GET /api/cases/{case_id}/judge-report` 获取判定报告（结构化+文本总结）
 - `DELETE /api/cases/{case_id}` 删除样本（删除后可重新发起同路径判定）
 - `POST /api/cases/check-by-path` 只检查样本目录文件是否齐全（不执行判定）
 - `POST /api/cases/run-kmer` 输入样本目录，执行 kmer 判定并入库
@@ -216,6 +218,18 @@ curl -X POST "$BASE_URL/api/cases/run-survey" \
 #### 请求参数
 - 同 `run-survey`
 
+#### 返回新增字段
+- `judge_report`：判定报告，字段示例
+```json
+{
+  "nt_abnormal": false,
+  "kmer_poisson": true,
+  "ploidy_text": "推测二倍体",
+  "transfer_suggestion": "建议流转",
+  "summary_text": "采用kmer 17进行Survey分析，预估得到: ..."
+}
+```
+
 #### curl 示例
 ```bash
 curl -X POST "$BASE_URL/api/cases/run-by-path" \
@@ -274,6 +288,17 @@ curl -X POST "$BASE_URL/api/cases/rerun-survey" \
 - 自动识别样本目录（若解压后仅有一层目录则进入该目录）
 - 后续与现有 `run-by-path` 一致：检查文件完整性 -> 执行 survey 判定 -> 入库
 - 额外参数会写入 `survey_cases`：`stage_code/bioinfo_emails_json/operation_emails_json/group_emails_json/archive_path`
+- 返回中包含 `judge_report`（同 `run-by-path`）
+
+### 8) judge-report（GET /api/cases/{case_id}/judge-report）
+#### 说明
+- 根据已入库的 `kmer_result/nt_result/result_metrics/survey_result` 自动填充判定报告。
+- 该接口不触发重算，仅做结果组织与文本生成。
+
+#### curl 示例
+```bash
+curl -X GET "$BASE_URL/api/cases/12/judge-report"
+```
 
 #### curl 示例
 ```bash
@@ -351,6 +376,7 @@ curl -X DELETE "$BASE_URL/api/cases/12"
 - `case_id`：数据库中的样本主键，可用于后续 `GET /api/cases/{case_id}` 查询。
 - `run-survey/rerun-survey/run-by-path` 的判定入口统一与 `survey_judge_single.py` 对齐：目标物种由 `all.ntcls.xls` 首行 `Sample name` 推导，并同时用于 kmer 与 nt。
 - `run-kmer/run-survey/rerun-survey/run-by-path` 会自动绘制 Spe/Num 峰图，并写入 `kmer_result.spe_plot_path/num_plot_path`。
+- `run-survey/run-by-path/run-by-archive` 会始终尝试生成 GC 图用于展示；是否参与最终裁决仍按原有 GC 触发规则，不改变判定逻辑。
 - 峰图统一输出到固定目录 `data/kmer_plots/`（按 `sample_dir` 哈希分桶），不再写回样本目录。
 
 ## run-survey 响应示例（精简）
@@ -389,6 +415,39 @@ curl -X DELETE "$BASE_URL/api/cases/12"
 }
 ```
 
+## 常用数据库查询速查（SQLite）
+数据库文件：
+```bash
+data/survey_backend.sqlite3
+```
+
+### Shell 一行命令版（可直接复制）
+```bash
+# 变量版（推荐）
+DB="data/survey_backend.sqlite3"
+
+# 1) 最近 20 条样本（含判定结果）
+sqlite3 "$DB" "SELECT c.id,c.sample_code,c.stage_code,c.status,sr.final_level,sr.should_transfer,c.updated_at FROM survey_cases c LEFT JOIN survey_results sr ON sr.case_id=c.id ORDER BY c.updated_at DESC,c.id DESC LIMIT 20;"
+
+# 2) 查询包含运营邮箱的 survey 结果（替换邮箱关键字）
+sqlite3 "$DB" "SELECT c.id,c.sample_code,c.stage_code,c.operation_emails_json,sr.final_level,sr.should_transfer,c.updated_at FROM survey_cases c LEFT JOIN survey_results sr ON sr.case_id=c.id WHERE c.operation_emails_json LIKE '%ops_person@example.com%' ORDER BY c.updated_at DESC;"
+
+# 3) 查询包含群组邮箱的样本（替换邮箱关键字）
+sqlite3 "$DB" "SELECT id,sample_code,stage_code,group_emails_json,status,updated_at FROM survey_cases WHERE group_emails_json LIKE '%ops@example.com%' ORDER BY updated_at DESC;"
+
+# 4) 查询某阶段重度污染（替换阶段）
+sqlite3 "$DB" "SELECT c.id,c.sample_code,c.stage_code,sr.final_level,sr.remark,c.updated_at FROM survey_cases c JOIN survey_results sr ON sr.case_id=c.id WHERE c.stage_code='P1' AND sr.final_level='重度污染' ORDER BY c.updated_at DESC;"
+
+# 5) 判定级别统计
+sqlite3 "$DB" "SELECT COALESCE(sr.final_level,'未判定') AS final_level,COUNT(*) AS cnt FROM survey_cases c LEFT JOIN survey_results sr ON sr.case_id=c.id GROUP BY COALESCE(sr.final_level,'未判定') ORDER BY cnt DESC;"
+
+# 6) 单样本全链路联查（替换 sample_code）
+sqlite3 "$DB" "SELECT c.id,c.sample_code,c.target_species,c.status,kr.pattern AS kmer_pattern,nr.nt_level,gr.status AS gc_status,sr.final_level,sr.should_transfer,c.updated_at FROM survey_cases c LEFT JOIN kmer_results kr ON kr.case_id=c.id LEFT JOIN nt_results nr ON nr.case_id=c.id LEFT JOIN gc_results gr ON gr.case_id=c.id LEFT JOIN survey_results sr ON sr.case_id=c.id WHERE c.sample_code='FDSW260016086-2r';"
+
+# 7) 排查未完成判定（没有 survey_results）
+sqlite3 "$DB" "SELECT c.id,c.sample_code,c.stage_code,c.status,c.updated_at FROM survey_cases c LEFT JOIN survey_results sr ON sr.case_id=c.id WHERE sr.case_id IS NULL ORDER BY c.updated_at DESC;"
+```
+
 ## 目录结构
 ```text
 backend/
@@ -404,6 +463,26 @@ backend/
 ```
 
 ## 运行方式
+先配置邮件相关环境变量（默认关闭）：
+```bash
+export MAIL_ENABLED=false
+export MAIL_FROM="1623893955@qq.com"
+export MAIL_TO="zhurui8901@novogene.com"
+export MAIL_SMTP_HOST="smtp.qq.com"
+export MAIL_SMTP_PORT=465
+export MAIL_SMTP_USE_SSL=true
+export MAIL_SMTP_USERNAME="1623893955@qq.com"
+export MAIL_SMTP_PASSWORD="<QQ邮箱SMTP授权码>"
+export MAIL_SUBJECT_PREFIX="[Survey提醒]"
+export MAIL_CASE_LIST_URL="http://192.168.20.24:5173/cases"
+```
+
+说明：
+- `MAIL_ENABLED=false` 时不发送邮件，仅执行判定与入库。
+- `MAIL_ENABLED=true` 时，在 `run-survey`、`rerun-survey`、`run-by-path`、`run-by-archive` 成功后异步发送提醒邮件（失败不影响主流程）。
+- `MAIL_TO` 当前先固定 `zhurui8901@novogene.com`，后续可改为动态收件策略。
+
+启动后端：
 ```bash
 conda run -n zhurui_agent python -m uvicorn backend.app.main:app --host 0.0.0.0 --reload --port 8001
 ```

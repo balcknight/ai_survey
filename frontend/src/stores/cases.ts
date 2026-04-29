@@ -1,8 +1,8 @@
 import { computed, ref } from 'vue'
 import { defineStore } from 'pinia'
 import { ElMessage } from 'element-plus'
-import { checkByPath, deleteCase, getCaseDetail, getCases, rerunSurvey, runKmer, runNt, runSurvey } from '../api/cases'
-import type { CaseDetail, CaseSummary, FileCheckResponse, RunResponse } from '../types/case'
+import { checkByPath, deleteCase, getCaseDetail, getCases, getJudgeReport, rerunSurvey, runKmer, runNt, runSurvey } from '../api/cases'
+import type { CaseDetail, CaseSummary, FileCheckResponse, JudgeReport, RunResponse } from '../types/case'
 
 export type RunType = 'kmer' | 'nt' | 'survey'
 
@@ -13,6 +13,7 @@ export const useCasesStore = defineStore('cases', () => {
 
   const selectedCaseId = ref<number | null>(null)
   const selectedCase = ref<CaseDetail | null>(null)
+  const selectedJudgeReport = ref<JudgeReport | null>(null)
   const loadingDetail = ref(false)
   const boardDrawerVisible = ref(false)
 
@@ -56,6 +57,11 @@ export const useCasesStore = defineStore('cases', () => {
     loadingDetail.value = true
     try {
       selectedCase.value = await getCaseDetail(caseId)
+      try {
+        selectedJudgeReport.value = await getJudgeReport(caseId)
+      } catch {
+        selectedJudgeReport.value = null
+      }
     } finally {
       loadingDetail.value = false
     }
@@ -134,6 +140,7 @@ export const useCasesStore = defineStore('cases', () => {
     if (selectedCaseId.value === caseId) {
       selectedCaseId.value = null
       selectedCase.value = null
+      selectedJudgeReport.value = null
       boardDrawerVisible.value = false
     }
     await fetchList()
@@ -160,6 +167,7 @@ export const useCasesStore = defineStore('cases', () => {
     loadingList,
     selectedCaseId,
     selectedCase,
+    selectedJudgeReport,
     loadingDetail,
     boardDrawerVisible,
     runningType,

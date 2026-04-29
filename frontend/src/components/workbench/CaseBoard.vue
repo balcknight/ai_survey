@@ -55,7 +55,7 @@ const gcPlotUrl = computed(() => {
   const artifacts = gcArtifacts.value
   const pngPath = typeof artifacts?.png === 'string' ? artifacts.png : ''
   const updatedAt = gc?.updated_at ?? store.selectedCase?.updated_at
-  if (!caseId || !gc?.executed || gc.status !== 'ok' || !pngPath) return ''
+  if (!caseId || !pngPath) return ''
   const qs = new URLSearchParams({
     t: String(updatedAt ?? ''),
   })
@@ -64,8 +64,8 @@ const gcPlotUrl = computed(() => {
 
 const gcPlotEmptyText = computed(() => {
   const gc = store.selectedCase?.gc_result
-  if (!gc?.executed) return '本样本未触发 GC 复核'
-  if (gc.status !== 'ok') return 'GC 复核未产出可展示图像'
+  if (!gc) return '暂无 GC 数据'
+  if (gc.status === 'fail') return 'GC 判定失败，未产出可展示图像'
   return '暂无 GC 图'
 })
 
@@ -228,6 +228,20 @@ async function onDelete() {
                 @click="openPlotPreview('GC', gcPlotUrl)"
               />
             </el-card>
+          </div>
+        </el-card>
+
+        <el-card shadow="never">
+          <template #header>判定报告</template>
+          <div class="kv-grid">
+            <div><b>NT比对是否异常:</b> {{ formatCellValue(store.selectedJudgeReport?.nt_abnormal) }}</div>
+            <div><b>Kmer峰型是否泊松:</b> {{ formatCellValue(store.selectedJudgeReport?.kmer_poisson) }}</div>
+            <div><b>物种倍性:</b> {{ formatCellValue(store.selectedJudgeReport?.ploidy_text) }}</div>
+            <div><b>流转建议:</b> {{ formatCellValue(store.selectedJudgeReport?.transfer_suggestion) }}</div>
+            <div class="span-2">
+              <b>survey结论:</b>
+              <div class="remark-content">{{ formatLongText(store.selectedJudgeReport?.summary_text) }}</div>
+            </div>
           </div>
         </el-card>
 

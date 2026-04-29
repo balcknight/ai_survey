@@ -1,5 +1,6 @@
 import { createRouter, createWebHistory } from 'vue-router'
 import SurveyWorkbenchView from '../views/SurveyWorkbenchView.vue'
+import ManualReviewPrototypeView from '../views/ManualReviewPrototypeView.vue'
 
 const router = createRouter({
   history: createWebHistory(),
@@ -12,6 +13,11 @@ const router = createRouter({
       path: '/cases',
       name: 'cases',
       component: SurveyWorkbenchView,
+    },
+    {
+      path: '/review-prototype',
+      name: 'review-prototype',
+      component: ManualReviewPrototypeView,
     },
   ],
 })

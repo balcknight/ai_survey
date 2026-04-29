@@ -1,16 +1,21 @@
 <script setup lang="ts">
+import { useRouter } from 'vue-router'
 import RunPanel from '../components/workbench/RunPanel.vue'
 import CaseList from '../components/workbench/CaseList.vue'
 import CaseBoard from '../components/workbench/CaseBoard.vue'
 import { useCasesStore } from '../stores/cases'
 
 const store = useCasesStore()
+const router = useRouter()
 </script>
 
 <template>
   <div class="workbench-page">
     <header class="workbench-page__header">
-      <h1>Survey 判定工作台</h1>
+      <div class="workbench-page__header-top">
+        <h1>Survey 判定工作台</h1>
+        <el-button type="primary" plain @click="router.push('/review-prototype')">进入人工审核原型</el-button>
+      </div>
       <p>支持按路径执行 kmer / nt / survey，点击样本后以抽屉形式展示详情看板。</p>
     </header>
 
@@ -50,6 +55,13 @@ const store = useCasesStore()
   border-radius: 8px;
   background: #fff;
   padding: 12px 16px;
+}
+
+.workbench-page__header-top {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
 }
 
 .workbench-page__header h1 {

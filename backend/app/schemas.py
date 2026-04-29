@@ -247,6 +247,14 @@ class RunByPathIn(BaseModel):
     verbose: bool = True
 
 
+class JudgeReportOut(BaseModel):
+    nt_abnormal: bool | None = None
+    kmer_poisson: bool | None = None
+    ploidy_text: str | None = None
+    transfer_suggestion: str | None = None
+    summary_text: str
+
+
 class RunByPathOut(BaseModel):
     sample_dir: str
     file_check: FileCheckOut
@@ -254,6 +262,7 @@ class RunByPathOut(BaseModel):
     message: str
     case_id: int | None = None
     case_detail: CaseDetailOut | None = None
+    judge_report: JudgeReportOut | None = None
 
 
 class ContactInfo(BaseModel):
@@ -274,6 +283,7 @@ class ExternalRunByArchiveOut(BaseModel):
     message: str
     case_id: int | None = None
     case_detail: CaseDetailOut | None = None
+    judge_report: JudgeReportOut | None = None
 
 
 class CheckByPathIn(BaseModel):

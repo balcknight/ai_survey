@@ -1,5 +1,13 @@
 import http from './http'
-import type { CaseDetail, CaseListResponse, CaseSummary, FileCheckResponse, RunRequest, RunResponse } from '../types/case'
+import type {
+  CaseDetail,
+  CaseListResponse,
+  CaseSummary,
+  FileCheckResponse,
+  JudgeReport,
+  RunRequest,
+  RunResponse,
+} from '../types/case'
 
 export interface ListQuery {
   limit: number
@@ -45,6 +53,11 @@ export async function getCases(params: ListQuery): Promise<CaseListResponse> {
 
 export async function getCaseDetail(caseId: number): Promise<CaseDetail> {
   const { data } = await http.get(`/api/cases/${caseId}`)
+  return data
+}
+
+export async function getJudgeReport(caseId: number): Promise<JudgeReport> {
+  const { data } = await http.get(`/api/cases/${caseId}/judge-report`)
   return data
 }
 

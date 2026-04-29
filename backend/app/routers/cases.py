@@ -6,8 +6,9 @@ import uuid
 import zipfile
 from datetime import datetime
 from pathlib import Path
+import logging
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
+from fastapi import APIRouter, BackgroundTasks, Depends, File, Form, HTTPException, Query, UploadFile
 from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
 
@@ -16,6 +17,7 @@ from ..db import get_db
 from ..json_utils import from_json_text
 from ..services.gc_plot import GC_PLOT_ROOT, cleanup_gc_outputs
 from ..services.kmer_plot import KMER_PLOT_ROOT, cleanup_kmer_plots, generate_kmer_plots
+from ..services.mailer import send_survey_done_email
 from ..services.survey_runner import (
     check_required_files,
     infer_target_species,
@@ -26,6 +28,7 @@ from ..services.survey_runner import (
 
 router = APIRouter(prefix="/api/cases", tags=["cases"])
 EXTERNAL_UPLOAD_ROOT = Path("data/external_uploads").resolve()
+logger = logging.getLogger(__name__)
 
 
 def _normalize_sample_dir(sample_dir: str) -> str:
@@ -170,6 +173,133 @@ def _to_result_metrics_input(result_metrics: dict) -> schemas.ResultMetricsIn:
     )
 
 
+def _format_num(value: object, digits: int = 2, fallback: str = "--") -> str:
+    try:
+        val = float(value)  # type: ignore[arg-type]
+        text = f"{val:.{digits}f}".rstrip("0").rstrip(".")
+        return text if text else "0"
+    except Exception:
+        return fallback
+
+
+def _ploidy_human(pattern: str | None) -> str:
+    mapping = {
+        "二倍体": "推测二倍体",
+        "三倍体": "推测三倍体",
+        "四倍体": "推测四倍体",
+    }
+    return mapping.get(pattern or "", f"待人工确认（{pattern or '未知'}）")
+
+
+def _build_judge_report_payload(case_detail: schemas.CaseDetailOut | None) -> schemas.JudgeReportOut | None:
+    if case_detail is None:
+        return None
+
+    nt_abnormal = case_detail.nt_result.is_heavy_contamination if case_detail.nt_result else None
+    kmer_poisson = case_detail.kmer_result.is_normal if case_detail.kmer_result else None
+
+    pattern = case_detail.result_metrics.ploidy_pattern if case_detail.result_metrics else None
+    multiplier = case_detail.result_metrics.ploidy_multiplier if case_detail.result_metrics else None
+    adjusted = case_detail.result_metrics.adjusted if case_detail.result_metrics else None
+    raw = case_detail.result_metrics.raw if case_detail.result_metrics else None
+
+    revised_mono = _format_num((adjusted or {}).get("revised_genome_size_m"))
+    heter = _format_num((adjusted or {}).get("heterozygous_rate_percent"))
+    repeat = _format_num((adjusted or {}).get("repeat_rate_percent"))
+    kmer_k = str((raw or {}).get("kmer") or "--")
+
+    ploidy_text = _ploidy_human(pattern)
+    transfer_suggestion = "建议流转" if case_detail.should_transfer == "是" else "重新送样"
+    if case_detail.should_transfer == "转人工":
+        transfer_suggestion = "转人工复核"
+
+    summary = (
+        f"采用kmer {kmer_k}进行Survey分析，预估得到: 矫正后基因组大小为{revised_mono}Mbp，"
+        f"杂合率为{heter}%，重复序列比例为{repeat}%。"
+    )
+    if multiplier and multiplier > 1:
+        full_size = "--"
+        try:
+            full_size = _format_num(float(revised_mono) * float(multiplier))
+        except Exception:
+            pass
+        summary += (
+            f" 多倍体情况下，单套基因组大小为{revised_mono}Mbp，杂合率为{heter}%，"
+            f"重复序列比例为{repeat}%。全套基因组大小约为{full_size}Mbp。"
+        )
+
+    return schemas.JudgeReportOut(
+        nt_abnormal=nt_abnormal,
+        kmer_poisson=kmer_poisson,
+        ploidy_text=ploidy_text,
+        transfer_suggestion=transfer_suggestion,
+        summary_text=summary,
+    )
+
+
+def _ensure_gc_plot_artifacts(merged: dict, file_check: schemas.FileCheckOut, sample_dir: str) -> dict:
+    updated = dict(merged)
+    gc_result = dict(updated.get("gc_result") or {})
+    gc_raw = gc_result.get("gc_raw")
+
+    has_png = False
+    if isinstance(gc_raw, dict):
+        artifacts = gc_raw.get("artifacts")
+        has_png = isinstance(artifacts, dict) and bool(str(artifacts.get("png") or "").strip())
+    if has_png:
+        updated["gc_result"] = gc_result
+        return updated
+
+    try:
+        from gc_depth_line_judge import resolve_gc_input_file, run_gc_depth_line
+        from ..services.gc_plot import build_gc_output_paths
+
+        gc_paths = resolve_gc_input_file(sample_dir)
+        pos_path = gc_paths["pos_path"]
+        output_paths = build_gc_output_paths(sample_dir=sample_dir, pos_path=pos_path)
+        gc_raw_plot = run_gc_depth_line(
+            pos_path=pos_path,
+            out_json=output_paths["out_json"],
+            out_png=output_paths["out_png"],
+        )
+        if not isinstance(gc_raw_plot, dict):
+            raise ValueError("GC绘图返回格式异常")
+        if not gc_result:
+            gc_result = {"executed": False, "status": "skipped", "reason": "仅补充GC图展示，未参与裁决"}
+        gc_result["pos_path"] = gc_result.get("pos_path") or pos_path
+        gc_result["gc_raw"] = gc_raw_plot
+    except Exception as exc:
+        # 只记录告警，不改变原有GC判定逻辑和状态。
+        warnings = list(updated.get("warnings") or [])
+        warnings.append(f"GC图生成失败: {exc}")
+        updated["warnings"] = warnings
+
+    updated["gc_result"] = gc_result
+    return updated
+
+
+def _enqueue_survey_done_email(
+    background_tasks: BackgroundTasks,
+    *,
+    case_detail: schemas.CaseDetailOut,
+    sample_dir: str,
+    judge_report: schemas.JudgeReportOut | None,
+) -> None:
+    def _send() -> None:
+        try:
+            send_survey_done_email(
+                case_id=case_detail.id,
+                sample_code=case_detail.sample_code,
+                sample_dir=sample_dir,
+                transfer_suggestion=judge_report.transfer_suggestion if judge_report else None,
+                summary_text=judge_report.summary_text if judge_report else None,
+            )
+        except Exception as exc:
+            logger.exception("邮件提醒发送失败: case_id=%s, error=%s", case_detail.id, exc)
+
+    background_tasks.add_task(_send)
+
+
 def _parse_contact_list_json(field_value: str, field_name: str) -> list[schemas.ContactInfo]:
     try:
         raw = json.loads(field_value)
@@ -279,8 +409,24 @@ def get_gc_plot(case_id: int, db: Session = Depends(get_db)):
     return FileResponse(str(path), media_type="image/png", filename=path.name)
 
 
+@router.get("/{case_id}/judge-report", response_model=schemas.JudgeReportOut)
+def get_judge_report(case_id: int, db: Session = Depends(get_db)):
+    obj = crud.get_case_detail(db, case_id)
+    if obj is None:
+        raise HTTPException(status_code=404, detail="样本不存在")
+    detail = crud.to_case_detail_out(obj)
+    report = _build_judge_report_payload(detail)
+    if report is None:
+        raise HTTPException(status_code=404, detail="该样本暂无判定报告")
+    return report
+
+
 @router.post("/run-by-path", response_model=schemas.RunByPathOut)
-def run_by_path(payload: schemas.RunByPathIn, db: Session = Depends(get_db)):
+def run_by_path(
+    payload: schemas.RunByPathIn,
+    background_tasks: BackgroundTasks,
+    db: Session = Depends(get_db),
+):
     normalized_dir = _normalize_sample_dir(payload.sample_dir)
     resolved_sample_code = _resolve_sample_code(payload.sample_code, normalized_dir)
     _guard_duplicate_source_path(db, normalized_dir, case_id=None)
@@ -296,6 +442,7 @@ def run_by_path(payload: schemas.RunByPathIn, db: Session = Depends(get_db)):
     try:
         merged = run_survey_by_paths(file_check=file_check, verbose=payload.verbose)
         merged = _attach_kmer_plots(merged, file_check, normalized_dir)
+        merged = _ensure_gc_plot_artifacts(merged, file_check, normalized_dir)
         obj = crud.import_case_from_survey_json(
             db=db,
             sample_code=resolved_sample_code,
@@ -309,18 +456,29 @@ def run_by_path(payload: schemas.RunByPathIn, db: Session = Depends(get_db)):
     if detail_obj is None:
         raise HTTPException(status_code=500, detail="执行后读取样本失败")
 
+    detail = crud.to_case_detail_out(detail_obj)
+    report = _build_judge_report_payload(detail)
+    _enqueue_survey_done_email(
+        background_tasks,
+        case_detail=detail,
+        sample_dir=normalized_dir,
+        judge_report=report,
+    )
+
     return schemas.RunByPathOut(
         sample_dir=normalized_dir,
         file_check=file_check,
         executed=True,
         message="文件齐全，已完成survey判定并入库",
         case_id=detail_obj.id,
-        case_detail=crud.to_case_detail_out(detail_obj),
+        case_detail=detail,
+        judge_report=report,
     )
 
 
 @router.post("/run-by-archive", response_model=schemas.ExternalRunByArchiveOut)
 async def run_by_archive(
+    background_tasks: BackgroundTasks,
     archive: UploadFile = File(...),
     stage_code: str = Form(...),
     sample_name: str = Form(...),
@@ -383,6 +541,7 @@ async def run_by_archive(
     try:
         merged = run_survey_by_paths(file_check=file_check, verbose=verbose)
         merged = _attach_kmer_plots(merged, file_check, normalized_dir)
+        merged = _ensure_gc_plot_artifacts(merged, file_check, normalized_dir)
         obj = crud.import_case_from_survey_json(
             db=db,
             sample_code=sample_name.strip() or None,
@@ -401,6 +560,15 @@ async def run_by_archive(
     if detail_obj is None:
         raise HTTPException(status_code=500, detail="执行后读取样本失败")
 
+    detail = crud.to_case_detail_out(detail_obj)
+    report = _build_judge_report_payload(detail)
+    _enqueue_survey_done_email(
+        background_tasks,
+        case_detail=detail,
+        sample_dir=normalized_dir,
+        judge_report=report,
+    )
+
     return schemas.ExternalRunByArchiveOut(
         sample_dir=normalized_dir,
         archive_path=str(archive_path),
@@ -413,7 +581,8 @@ async def run_by_archive(
         executed=True,
         message="压缩包文件齐全，已完成survey判定并入库",
         case_id=detail_obj.id,
-        case_detail=crud.to_case_detail_out(detail_obj),
+        case_detail=detail,
+        judge_report=report,
     )
 
 
@@ -519,7 +688,11 @@ def run_nt(payload: schemas.RunStepByPathIn, db: Session = Depends(get_db)):
 
 
 @router.post("/run-survey", response_model=schemas.RunStepByPathOut)
-def run_survey(payload: schemas.RunStepByPathIn, db: Session = Depends(get_db)):
+def run_survey(
+    payload: schemas.RunStepByPathIn,
+    background_tasks: BackgroundTasks,
+    db: Session = Depends(get_db),
+):
     normalized_dir = _normalize_sample_dir(payload.sample_dir)
     resolved_sample_code = _resolve_sample_code(payload.sample_code, normalized_dir)
     _guard_duplicate_source_path(db, normalized_dir, case_id=payload.case_id)
@@ -562,18 +735,29 @@ def run_survey(payload: schemas.RunStepByPathIn, db: Session = Depends(get_db)):
 
     if detail_obj is None:
         raise HTTPException(status_code=500, detail="执行后读取样本失败")
+    detail = crud.to_case_detail_out(detail_obj)
+    _enqueue_survey_done_email(
+        background_tasks,
+        case_detail=detail,
+        sample_dir=normalized_dir,
+        judge_report=_build_judge_report_payload(detail),
+    )
     return schemas.RunStepByPathOut(
         sample_dir=normalized_dir,
         executed=True,
         message="survey判定完成并已入库",
         file_check=file_check,
         case_id=detail_obj.id,
-        case_detail=crud.to_case_detail_out(detail_obj),
+        case_detail=detail,
     )
 
 
 @router.post("/rerun-survey", response_model=schemas.RunStepByPathOut)
-def rerun_survey(payload: schemas.RerunSurveyIn, db: Session = Depends(get_db)):
+def rerun_survey(
+    payload: schemas.RerunSurveyIn,
+    background_tasks: BackgroundTasks,
+    db: Session = Depends(get_db),
+):
     if not payload.confirm:
         raise HTTPException(status_code=400, detail="请显式确认：confirm=true 后才能覆盖重跑")
 
@@ -624,13 +808,20 @@ def rerun_survey(payload: schemas.RerunSurveyIn, db: Session = Depends(get_db)):
 
     if detail_obj is None:
         raise HTTPException(status_code=500, detail="重跑后读取样本失败")
+    detail = crud.to_case_detail_out(detail_obj)
+    _enqueue_survey_done_email(
+        background_tasks,
+        case_detail=detail,
+        sample_dir=normalized_dir,
+        judge_report=_build_judge_report_payload(detail),
+    )
     return schemas.RunStepByPathOut(
         sample_dir=normalized_dir,
         executed=True,
         message="survey重跑完成，已覆盖原记录",
         file_check=file_check,
         case_id=detail_obj.id,
-        case_detail=crud.to_case_detail_out(detail_obj),
+        case_detail=detail,
     )
 
 

@@ -113,6 +113,7 @@ export interface RunResponse {
   message: string
   case_id?: number
   case_detail?: CaseDetail
+  judge_report?: JudgeReport
   file_check?: {
     missing?: string[]
     complete?: boolean
@@ -122,6 +123,14 @@ export interface RunResponse {
     ntspe_source?: string | null
     ntspe_paths?: string[]
   }
+}
+
+export interface JudgeReport {
+  nt_abnormal: boolean | null
+  kmer_poisson: boolean | null
+  ploidy_text: string | null
+  transfer_suggestion: string | null
+  summary_text: string
 }
 
 export interface FileCheckResponse {
