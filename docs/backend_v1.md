@@ -76,8 +76,10 @@ SAMPLE_DIR="/data/work/zhurui/survey_rec/data/shenshaoqi_data/survey1/X101SC2507
 SAMPLE_DIR1="data/shenshaoqi_data_v2/1"
 ```
 
-## 0) 列表查询（GET /api/cases）
-### 请求参数
+## 接口说明
+
+### 0) 列表查询（GET /api/cases）
+#### 请求参数
 - `limit`：返回条数，默认 `20`，范围 `1~200`
 - `offset`：偏移量，默认 `0`
 - `target_species`：按目标物种模糊匹配（`contains`）
@@ -85,7 +87,7 @@ SAMPLE_DIR1="data/shenshaoqi_data_v2/1"
 - `should_transfer`：按是否转移精确匹配（如 `是/否`）
 - `status`：按状态精确匹配（`created|kmer_done|nt_done|judged|failed`）
 
-### curl 示例（可直接执行）
+#### curl 示例（可直接执行）
 ```bash
 # 基础分页（第一页）
 curl -G "$BASE_URL/api/cases" \
@@ -123,11 +125,11 @@ curl -G "$BASE_URL/api/cases" \
   --data-urlencode "offset=0"
 ```
 
-## 1) 检查文件但不执行
-### 请求参数
+### 1) 检查文件但不执行（POST /api/cases/check-by-path）
+#### 请求参数
 - `sample_dir`：样本目录绝对路径或相对路径
 
-### curl 示例
+#### curl 示例
 ```bash
 curl -X POST "$BASE_URL/api/cases/check-by-path" \
   -H "Content-Type: application/json" \
@@ -136,13 +138,13 @@ curl -X POST "$BASE_URL/api/cases/check-by-path" \
   }"
 ```
 
-### 返回关键字段
+#### 返回关键字段
 - `file_check.kmer_complete`：是否具备 kmer 执行条件（SpeFreq+NumFreq）
 - `file_check.nt_complete`：是否具备 NT 执行条件（ntcls+ntspe）
 - `file_check.complete`：是否具备 survey 执行条件（五文件齐全，含 `*.Result.xls`）
 - `file_check.missing`：缺失文件列表
 
-### 响应示例
+#### 响应示例
 ```json
 {
   "sample_dir": "/path/to/sample",
@@ -161,14 +163,14 @@ curl -X POST "$BASE_URL/api/cases/check-by-path" \
 }
 ```
 
-## 2) run-kmer
-### 请求参数
+### 2) run-kmer（POST /api/cases/run-kmer）
+#### 请求参数
 - `sample_dir`：样本目录
 - `sample_code`：样本编号（可选；未传或传空字符串时，默认取 `sample_dir` 最后一级目录名）
 - `case_id`：已有 case 时可传，传了就更新该 case（可选）
 - `verbose`：是否打印详细日志（默认 `true`）
 
-### curl 示例
+#### curl 示例
 ```bash
 curl -X POST "$BASE_URL/api/cases/run-kmer" \
   -H "Content-Type: application/json" \
@@ -179,11 +181,11 @@ curl -X POST "$BASE_URL/api/cases/run-kmer" \
   }"
 ```
 
-## 3) run-nt
-### 请求参数
+### 3) run-nt（POST /api/cases/run-nt）
+#### 请求参数
 - 同 `run-kmer`
 
-### curl 示例
+#### curl 示例
 ```bash
 curl -X POST "$BASE_URL/api/cases/run-nt" \
   -H "Content-Type: application/json" \
@@ -194,11 +196,11 @@ curl -X POST "$BASE_URL/api/cases/run-nt" \
   }"
 ```
 
-## 4) run-survey（推荐前端主按钮）
-### 请求参数
+### 4) run-survey（POST /api/cases/run-survey，推荐前端主按钮）
+#### 请求参数
 - 同 `run-kmer`
 
-### curl 示例
+#### curl 示例
 ```bash
 curl -X POST "$BASE_URL/api/cases/run-survey" \
   -H "Content-Type: application/json" \
@@ -209,11 +211,11 @@ curl -X POST "$BASE_URL/api/cases/run-survey" \
   }"
 ```
 
-## 5) run-by-path（兼容接口）
-### 请求参数
+### 5) run-by-path（POST /api/cases/run-by-path，兼容接口）
+#### 请求参数
 - 同 `run-survey`
 
-### curl 示例
+#### curl 示例
 ```bash
 curl -X POST "$BASE_URL/api/cases/run-by-path" \
   -H "Content-Type: application/json" \
@@ -224,14 +226,14 @@ curl -X POST "$BASE_URL/api/cases/run-by-path" \
   }"
 ```
 
-## 6) rerun-survey（显式确认覆盖）
-### 请求参数
+### 6) rerun-survey（POST /api/cases/rerun-survey，显式确认覆盖）
+#### 请求参数
 - `sample_dir`：样本目录（必须已存在历史记录）
 - `sample_code`：样本编号（可选；未传或传空字符串时，默认取 `sample_dir` 最后一级目录名）
 - `verbose`：是否打印详细日志（默认 `true`）
 - `confirm`：必须为 `true`，否则拒绝执行
 
-### curl 示例
+#### curl 示例
 ```bash
 curl -X POST "$BASE_URL/api/cases/rerun-survey" \
   -H "Content-Type: application/json" \
@@ -243,18 +245,39 @@ curl -X POST "$BASE_URL/api/cases/rerun-survey" \
   }"
 ```
 
-## 7) run-by-archive（外部上传压缩包）
-### 请求参数（`multipart/form-data`）
-- `archive`：`.zip` 压缩包
+### 7) run-by-archive（POST /api/cases/run-by-archive，外部上传压缩包）
+#### 请求参数（`multipart/form-data`）
+- `archive`：样本文件压缩包（仅支持 `.zip`）
 - `stage_code`：分期编号
-- `sample_name`：样本名称（核酸编号）
-- `contact`：JSON 字符串，格式 `{"name":"...","email":"..."}`
-- `cc_emails`：可选，JSON 数组字符串或逗号分隔邮箱串
-- `verbose`：可选，默认 `true`
+- `sample_name`：样本名称（核酸编号，唯一标识符）
+- `contact`：生信/运营联系人 JSON 字符串
+```json
+{"name":"生信和运营的名字","email":"生信和运营的邮箱地址"}
+```
+- `cc_emails`：抄送邮箱，支持 JSON 数组字符串或逗号分隔字符串（可选）
+- `verbose`：是否输出详细日志（可选，默认 `true`）
 
-### curl 示例
+#### 压缩包内文件要求
+- 必需：`*.SpeFreq.cut`
+- 必需：`*.NumFreq.cut`
+- 必需：`all.ntcls.xls`（备选匹配：`*.ntcls.xls`）
+- 必需：至少一个 `*.species.xls`（备选：`*.species.test.xls`）
+- 必需：`*.Result.xls`
+- 可选：`*.pos`
+- 可选：`.html` 报告文件
+
+#### 处理逻辑
+- 服务端先保存压缩包到本地：`data/external_uploads/YYYYMMDD/<sample_name>_<task_id>/upload.zip`
+- 解压到：`.../extracted/`
+- 自动识别样本目录（若解压后仅有一层目录则进入该目录）
+- 后续与现有 `run-by-path` 一致：检查文件完整性 -> 执行 survey 判定 -> 入库
+- 额外参数会写入 `survey_cases`：`stage_code/contact_name/contact_email/cc_emails_json/archive_path`
+
+#### curl 示例
 ```bash
+BASE_URL="http://192.168.20.24:8001"
 ZIP_PATH="/tmp/survey_external_test.zip"
+
 curl -X POST "$BASE_URL/api/cases/run-by-archive" \
   -F "archive=@${ZIP_PATH};type=application/zip" \
   -F "stage_code=P1" \
@@ -264,7 +287,54 @@ curl -X POST "$BASE_URL/api/cases/run-by-archive" \
   -F "verbose=false"
 ```
 
-## 执行类接口返回说明（run-kmer/run-nt/run-survey/run-by-path/rerun-survey/run-by-archive）
+#### 响应示例（成功）
+```json
+{
+  "sample_dir": "/data/work/zhurui/survey_rec/data/external_uploads/20260428/FDSW260016086-2r_c3763b3d24fe/extracted/FDSW260016086-2r_CaiXia叶-1",
+  "archive_path": "/data/work/zhurui/survey_rec/data/external_uploads/20260428/FDSW260016086-2r_c3763b3d24fe/upload.zip",
+  "stage_code": "P1",
+  "sample_name": "FDSW260016086-2r",
+  "contact": {"name": "测试生信", "email": "bio@example.com"},
+  "cc_emails": ["ops@example.com", "qa@example.com"],
+  "file_check": {"complete": true, "missing": []},
+  "executed": true,
+  "message": "压缩包文件齐全，已完成survey判定并入库",
+  "case_id": 9
+}
+```
+
+#### 响应示例（文件不全）
+```json
+{
+  "executed": false,
+  "message": "输入文件不完整，缺失: *.Result.xls",
+  "file_check": {
+    "complete": false,
+    "missing": ["*.Result.xls"]
+  }
+}
+```
+
+### 8) 获取 kmer 峰图（GET /api/cases/{case_id}/kmer-plot）
+#### 请求参数
+- `spectrum`：`spe` 或 `num`
+
+#### curl 示例
+```bash
+curl -L "$BASE_URL/api/cases/12/kmer-plot?spectrum=spe" --output spe_plot.png
+```
+
+### 9) 删除样本（DELETE /api/cases/{case_id}）
+#### curl 示例
+```bash
+curl -X DELETE "$BASE_URL/api/cases/12"
+```
+
+#### 行为说明
+- 删除样本记录时会同步删除该样本关联的峰图文件（仅清理 `data/kmer_plots/` 受管目录内文件）。
+
+## 执行类接口返回说明
+（`run-kmer/run-nt/run-survey/run-by-path/rerun-survey/run-by-archive`）
 - `run-kmer` 依赖 `file_check.kmer_complete=true`。
 - `run-nt` 依赖 `file_check.nt_complete=true`。
 - `run-survey/run-by-path` 依赖 `file_check.complete=true`（即同时具备 `*.SpeFreq.cut/*.NumFreq.cut/all.ntcls.xls/all.ntspe.xls/*.Result.xls`）。
@@ -279,25 +349,7 @@ curl -X POST "$BASE_URL/api/cases/run-by-archive" \
 - `run-kmer/run-survey/rerun-survey/run-by-path` 会自动绘制 Spe/Num 峰图，并写入 `kmer_result.spe_plot_path/num_plot_path`。
 - 峰图统一输出到固定目录 `data/kmer_plots/`（按 `sample_dir` 哈希分桶），不再写回样本目录。
 
-## 7) 获取 kmer 峰图
-### 请求参数
-- `spectrum`：`spe` 或 `num`
-
-### curl 示例
-```bash
-curl -L "$BASE_URL/api/cases/12/kmer-plot?spectrum=spe" --output spe_plot.png
-```
-
-## 删除接口
-### curl 示例
-```bash
-curl -X DELETE "$BASE_URL/api/cases/12"
-```
-
-### 行为说明
-- 删除样本记录时会同步删除该样本关联的峰图文件（仅清理 `data/kmer_plots/` 受管目录内文件）。
-
-### run-survey 响应示例（精简）
+## run-survey 响应示例（精简）
 ```json
 {
   "sample_dir": "/path/to/sample",
