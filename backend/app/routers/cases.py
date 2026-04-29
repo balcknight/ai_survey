@@ -170,18 +170,24 @@ def _to_result_metrics_input(result_metrics: dict) -> schemas.ResultMetricsIn:
     )
 
 
-def _parse_contact_json(contact_json: str) -> schemas.ContactInfo:
+def _parse_contact_list_json(field_value: str, field_name: str) -> list[schemas.ContactInfo]:
     try:
-        raw = json.loads(contact_json)
-        return schemas.ContactInfo(**raw)
+        raw = json.loads(field_value)
+        if not isinstance(raw, list):
+            raise ValueError("not list")
+        return [schemas.ContactInfo(**item) for item in raw]
     except Exception as exc:
-        raise HTTPException(status_code=400, detail="contact 必须是合法 JSON，格式: {\"name\":\"...\",\"email\":\"...\"}") from exc
+        raise HTTPException(
+            status_code=400,
+            detail=f"{field_name} 必须是合法 JSON 数组，格式: "
+            "[{\"name\":\"...\",\"email\":\"...\"}]",
+        ) from exc
 
 
-def _parse_cc_emails(cc_emails_text: str | None) -> list[str]:
-    if cc_emails_text is None or not cc_emails_text.strip():
+def _parse_group_emails(group_emails_text: str | None) -> list[str]:
+    if group_emails_text is None or not group_emails_text.strip():
         return []
-    text = cc_emails_text.strip()
+    text = group_emails_text.strip()
     try:
         parsed = json.loads(text)
         if isinstance(parsed, list):
@@ -318,8 +324,9 @@ async def run_by_archive(
     archive: UploadFile = File(...),
     stage_code: str = Form(...),
     sample_name: str = Form(...),
-    contact: str = Form(...),
-    cc_emails: str | None = Form(None),
+    bioinfo_emails: str = Form(...),
+    operation_emails: str = Form(...),
+    group_emails: str | None = Form(None),
     verbose: bool = Form(True),
     db: Session = Depends(get_db),
 ):
@@ -327,8 +334,9 @@ async def run_by_archive(
     if not filename.lower().endswith(".zip"):
         raise HTTPException(status_code=400, detail="仅支持 .zip 压缩包")
 
-    contact_info = _parse_contact_json(contact)
-    cc_email_list = _parse_cc_emails(cc_emails)
+    bioinfo_contact_list = _parse_contact_list_json(bioinfo_emails, "bioinfo_emails")
+    operation_contact_list = _parse_contact_list_json(operation_emails, "operation_emails")
+    group_email_list = _parse_group_emails(group_emails)
 
     date_seg = datetime.now().strftime("%Y%m%d")
     task_id = uuid.uuid4().hex[:12]
@@ -364,8 +372,9 @@ async def run_by_archive(
             archive_path=str(archive_path),
             stage_code=stage_code,
             sample_name=sample_name,
-            contact=contact_info,
-            cc_emails=cc_email_list,
+            bioinfo_emails=bioinfo_contact_list,
+            operation_emails=operation_contact_list,
+            group_emails=group_email_list,
             file_check=file_check,
             executed=False,
             message=f"输入文件不完整，缺失: {', '.join(file_check.missing)}",
@@ -380,9 +389,9 @@ async def run_by_archive(
             source_path=normalized_dir,
             payload=merged,
             stage_code=stage_code,
-            contact_name=contact_info.name,
-            contact_email=contact_info.email,
-            cc_emails=cc_email_list,
+            bioinfo_emails=[item.model_dump() for item in bioinfo_contact_list],
+            operation_emails=[item.model_dump() for item in operation_contact_list],
+            group_emails=group_email_list,
             archive_path=str(archive_path),
         )
         detail_obj = crud.get_case_detail(db, obj.id)
@@ -397,8 +406,9 @@ async def run_by_archive(
         archive_path=str(archive_path),
         stage_code=stage_code,
         sample_name=sample_name,
-        contact=contact_info,
-        cc_emails=cc_email_list,
+        bioinfo_emails=bioinfo_contact_list,
+        operation_emails=operation_contact_list,
+        group_emails=group_email_list,
         file_check=file_check,
         executed=True,
         message="压缩包文件齐全，已完成survey判定并入库",

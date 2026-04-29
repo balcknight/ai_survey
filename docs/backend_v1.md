@@ -13,8 +13,9 @@
 - `target_species` 目标物种
 - `source_path` 来源路径
 - `stage_code` 分期编号（外部接口传入）
-- `contact_name` / `contact_email` 联系人信息（外部接口传入）
-- `cc_emails_json` 抄送邮箱列表（JSON）
+- `bioinfo_emails_json` 生信邮箱列表（JSON，元素结构：`{"name":"...","email":"..."}`）
+- `operation_emails_json` 运营邮箱列表（JSON，元素结构同上）
+- `group_emails_json` 群组邮箱列表（JSON 字符串数组）
 - `archive_path` 原始上传压缩包本地路径
 - `status`（`created|kmer_done|nt_done|judged|failed`）
 - `final_level`（冗余，便于筛选）
@@ -250,11 +251,12 @@ curl -X POST "$BASE_URL/api/cases/rerun-survey" \
 - `archive`：样本文件压缩包（仅支持 `.zip`）
 - `stage_code`：分期编号
 - `sample_name`：样本名称（核酸编号，唯一标识符）
-- `contact`：生信/运营联系人 JSON 字符串
+- `bioinfo_emails`：生信邮箱列表 JSON 字符串（元素结构同旧 `contact`）
 ```json
-{"name":"生信和运营的名字","email":"生信和运营的邮箱地址"}
+[{"name":"测试生信","email":"bio@example.com"}]
 ```
-- `cc_emails`：抄送邮箱，支持 JSON 数组字符串或逗号分隔字符串（可选）
+- `operation_emails`：运营邮箱列表 JSON 字符串（格式同 `bioinfo_emails`）
+- `group_emails`：群组邮箱，支持 JSON 数组字符串或逗号分隔字符串（可选）
 - `verbose`：是否输出详细日志（可选，默认 `true`）
 
 #### 压缩包内文件要求
@@ -271,19 +273,20 @@ curl -X POST "$BASE_URL/api/cases/rerun-survey" \
 - 解压到：`.../extracted/`
 - 自动识别样本目录（若解压后仅有一层目录则进入该目录）
 - 后续与现有 `run-by-path` 一致：检查文件完整性 -> 执行 survey 判定 -> 入库
-- 额外参数会写入 `survey_cases`：`stage_code/contact_name/contact_email/cc_emails_json/archive_path`
+- 额外参数会写入 `survey_cases`：`stage_code/bioinfo_emails_json/operation_emails_json/group_emails_json/archive_path`
 
 #### curl 示例
 ```bash
 BASE_URL="http://192.168.20.24:8001"
-ZIP_PATH="/tmp/survey_external_test.zip"
+ZIP_PATH="/data/work/zhurui/survey_rec/data/to_zhurui_surey_jinxianlan/FDSW260016086-2r_CaiXia叶-1/survey_external_test.zip"
 
 curl -X POST "$BASE_URL/api/cases/run-by-archive" \
   -F "archive=@${ZIP_PATH};type=application/zip" \
   -F "stage_code=P1" \
   -F "sample_name=FDSW260016086-2r" \
-  -F 'contact={"name":"测试生信","email":"bio@example.com"}' \
-  -F 'cc_emails=["ops@example.com","qa@example.com"]' \
+  -F 'bioinfo_emails=[{"name":"测试生信","email":"bio@example.com"}]' \
+  -F 'operation_emails=[{"name":"测试运营","email":"ops_person@example.com"}]' \
+  -F 'group_emails=["ops@example.com","qa@example.com"]' \
   -F "verbose=false"
 ```
 
@@ -294,8 +297,9 @@ curl -X POST "$BASE_URL/api/cases/run-by-archive" \
   "archive_path": "/data/work/zhurui/survey_rec/data/external_uploads/20260428/FDSW260016086-2r_c3763b3d24fe/upload.zip",
   "stage_code": "P1",
   "sample_name": "FDSW260016086-2r",
-  "contact": {"name": "测试生信", "email": "bio@example.com"},
-  "cc_emails": ["ops@example.com", "qa@example.com"],
+  "bioinfo_emails": [{"name": "测试生信", "email": "bio@example.com"}],
+  "operation_emails": [{"name": "测试运营", "email": "ops_person@example.com"}],
+  "group_emails": ["ops@example.com", "qa@example.com"],
   "file_check": {"complete": true, "missing": []},
   "executed": true,
   "message": "压缩包文件齐全，已完成survey判定并入库",

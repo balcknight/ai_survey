@@ -120,9 +120,9 @@ def create_case(db: Session, payload: schemas.CaseCreate) -> models.SurveyCase:
         target_species=payload.target_species,
         source_path=payload.source_path,
         stage_code=payload.stage_code,
-        contact_name=payload.contact_name,
-        contact_email=payload.contact_email,
-        cc_emails_json=to_json_text(payload.cc_emails),
+        bioinfo_emails_json=to_json_text([item.model_dump() for item in payload.bioinfo_emails]),
+        operation_emails_json=to_json_text([item.model_dump() for item in payload.operation_emails]),
+        group_emails_json=to_json_text(payload.group_emails),
         archive_path=payload.archive_path,
         status=payload.status,
         remark=payload.remark,
@@ -158,9 +158,9 @@ def import_case_from_survey_json(
     source_path: str | None,
     payload: dict,
     stage_code: str | None = None,
-    contact_name: str | None = None,
-    contact_email: str | None = None,
-    cc_emails: list[str] | None = None,
+    bioinfo_emails: list[dict] | None = None,
+    operation_emails: list[dict] | None = None,
+    group_emails: list[str] | None = None,
     archive_path: str | None = None,
 ) -> models.SurveyCase:
     target_species = payload.get("target_species")
@@ -172,9 +172,9 @@ def import_case_from_survey_json(
         target_species=target_species,
         source_path=source_path,
         stage_code=stage_code,
-        contact_name=contact_name,
-        contact_email=contact_email,
-        cc_emails=list(cc_emails or []),
+        bioinfo_emails=[schemas.ContactInfo(**item) for item in list(bioinfo_emails or [])],
+        operation_emails=[schemas.ContactInfo(**item) for item in list(operation_emails or [])],
+        group_emails=list(group_emails or []),
         archive_path=archive_path,
         status="created",
         kmer_result=schemas.KmerResultIn(
@@ -473,15 +473,32 @@ def to_case_detail_out(obj: models.SurveyCase) -> schemas.CaseDetailOut:
             updated_at=obj.result_metrics.updated_at,
         )
 
+    bioinfo_emails_raw = from_json_text(obj.bioinfo_emails_json, None)
+    if isinstance(bioinfo_emails_raw, list):
+        bioinfo_emails = [schemas.ContactInfo(**item) for item in bioinfo_emails_raw if isinstance(item, dict)]
+    elif obj.contact_name and obj.contact_email:
+        # 兼容历史单联系人字段
+        bioinfo_emails = [schemas.ContactInfo(name=obj.contact_name, email=obj.contact_email)]
+    else:
+        bioinfo_emails = []
+
+    operation_emails_raw = from_json_text(obj.operation_emails_json, [])
+    operation_emails = [schemas.ContactInfo(**item) for item in operation_emails_raw if isinstance(item, dict)]
+
+    group_emails = from_json_text(obj.group_emails_json, None)
+    if not isinstance(group_emails, list):
+        # 兼容历史抄送字段
+        group_emails = from_json_text(obj.cc_emails_json, [])
+
     return schemas.CaseDetailOut(
         id=obj.id,
         sample_code=obj.sample_code,
         target_species=obj.target_species,
         source_path=obj.source_path,
         stage_code=obj.stage_code,
-        contact_name=obj.contact_name,
-        contact_email=obj.contact_email,
-        cc_emails=from_json_text(obj.cc_emails_json, []),
+        bioinfo_emails=bioinfo_emails,
+        operation_emails=operation_emails,
+        group_emails=[str(item).strip() for item in group_emails if str(item).strip()],
         archive_path=obj.archive_path,
         status=obj.status,
         final_level=obj.final_level,

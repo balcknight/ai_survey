@@ -99,9 +99,9 @@ class CaseCreate(BaseModel):
     target_species: str
     source_path: str | None = None
     stage_code: str | None = None
-    contact_name: str | None = None
-    contact_email: str | None = None
-    cc_emails: list[str] = Field(default_factory=list)
+    bioinfo_emails: list["ContactInfo"] = Field(default_factory=list)
+    operation_emails: list["ContactInfo"] = Field(default_factory=list)
+    group_emails: list[str] = Field(default_factory=list)
     archive_path: str | None = None
     status: str = "created"
     remark: str | None = None
@@ -209,9 +209,9 @@ class CaseDetailOut(BaseModel):
     target_species: str
     source_path: str | None = None
     stage_code: str | None = None
-    contact_name: str | None = None
-    contact_email: str | None = None
-    cc_emails: list[str] = Field(default_factory=list)
+    bioinfo_emails: list["ContactInfo"] = Field(default_factory=list)
+    operation_emails: list["ContactInfo"] = Field(default_factory=list)
+    group_emails: list[str] = Field(default_factory=list)
     archive_path: str | None = None
     status: str
     final_level: str | None = None
@@ -266,8 +266,9 @@ class ExternalRunByArchiveOut(BaseModel):
     archive_path: str
     stage_code: str
     sample_name: str
-    contact: ContactInfo
-    cc_emails: list[str] = Field(default_factory=list)
+    bioinfo_emails: list[ContactInfo] = Field(default_factory=list)
+    operation_emails: list[ContactInfo] = Field(default_factory=list)
+    group_emails: list[str] = Field(default_factory=list)
     file_check: FileCheckOut
     executed: bool = False
     message: str

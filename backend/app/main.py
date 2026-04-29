@@ -38,6 +38,9 @@ def _ensure_case_columns() -> None:
         "contact_name": "VARCHAR(128)",
         "contact_email": "VARCHAR(255)",
         "cc_emails_json": "TEXT",
+        "bioinfo_emails_json": "TEXT",
+        "operation_emails_json": "TEXT",
+        "group_emails_json": "TEXT",
         "archive_path": "TEXT",
     }
     with engine.begin() as conn:
