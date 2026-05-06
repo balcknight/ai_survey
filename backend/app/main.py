@@ -6,8 +6,12 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import text
 
+from .config import load_env_files, log_mail_settings_on_startup
 from .db import Base, engine
 from .routers.cases import router as cases_router
+
+# 启动时自动加载项目配置文件（.env / backend/.env）。
+load_env_files()
 
 app = FastAPI(title="Survey Backend", version="0.1.0")
 
@@ -55,6 +59,7 @@ def _ensure_case_columns() -> None:
 @app.on_event("startup")
 def on_startup():
     init_db()
+    log_mail_settings_on_startup()
 
 
 @app.get("/health")

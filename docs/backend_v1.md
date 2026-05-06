@@ -74,7 +74,7 @@
 ## 通用测试前缀
 ```bash
 BASE_URL="http://127.0.0.1:8001"
-SAMPLE_DIR="/data/work/zhurui/survey_rec/data/shenshaoqi_data/survey1/X101SC2507/X101SC25070200-Z01-J002/FDSW250019884-2a_百花山C-嫩茎_1管"
+SAMPLE_DIR="/data/work/zhurui/survey_rec/data/to_zhurui_surey_jinxianlan/FDSW260016098-2r_DaYuanYe叶-1"
 
 SAMPLE_DIR1="data/shenshaoqi_data_v2/1"
 ```
@@ -463,7 +463,20 @@ backend/
 ```
 
 ## 运行方式
-先配置邮件相关环境变量（默认关闭）：
+先准备配置文件（推荐）：
+```bash
+cp .env.example .env
+```
+
+后端会在启动时自动按顺序加载：
+- 项目根目录 `.env`
+- `backend/.env`
+
+说明：
+- 自动加载时不会覆盖你当前 shell 已有的同名环境变量。
+- 因此可用“`.env` 提供默认值 + shell 临时覆盖”的方式调试。
+
+可配置项示例（邮件相关，默认关闭）：
 ```bash
 export MAIL_ENABLED=false
 export MAIL_FROM="1623893955@qq.com"

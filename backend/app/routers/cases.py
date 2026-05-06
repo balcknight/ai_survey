@@ -28,7 +28,7 @@ from ..services.survey_runner import (
 
 router = APIRouter(prefix="/api/cases", tags=["cases"])
 EXTERNAL_UPLOAD_ROOT = Path("data/external_uploads").resolve()
-logger = logging.getLogger(__name__)
+logger = logging.getLogger("uvicorn.error")
 
 
 def _normalize_sample_dir(sample_dir: str) -> str:
@@ -285,6 +285,8 @@ def _enqueue_survey_done_email(
     sample_dir: str,
     judge_report: schemas.JudgeReportOut | None,
 ) -> None:
+    logger.info("已加入邮件提醒后台任务: case_id=%s, sample_dir=%s", case_detail.id, sample_dir)
+
     def _send() -> None:
         try:
             send_survey_done_email(
