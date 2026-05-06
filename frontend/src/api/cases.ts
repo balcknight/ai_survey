@@ -5,6 +5,7 @@ import type {
   CaseSummary,
   FileCheckResponse,
   JudgeReport,
+  ManualReview,
   RunRequest,
   RunResponse,
 } from '../types/case'
@@ -16,6 +17,9 @@ export interface ListQuery {
   final_level?: string
   should_transfer?: string
   status?: string
+  stage_code?: string
+  bioinfo_email?: string
+  review_status?: 'reviewed' | 'unreviewed'
 }
 
 export async function getCases(params: ListQuery): Promise<CaseListResponse> {
@@ -58,6 +62,29 @@ export async function getCaseDetail(caseId: number): Promise<CaseDetail> {
 
 export async function getJudgeReport(caseId: number): Promise<JudgeReport> {
   const { data } = await http.get(`/api/cases/${caseId}/judge-report`)
+  return data
+}
+
+export function getCaseReportHtmlUrl(caseId: number): string {
+  const base = (import.meta.env.VITE_API_BASE_URL ?? 'http://192.168.20.24:8001').replace(/\/$/, '')
+  return `${base}/api/cases/${caseId}/report-html`
+}
+
+export function getCaseArchiveUrl(caseId: number): string {
+  const base = (import.meta.env.VITE_API_BASE_URL ?? 'http://192.168.20.24:8001').replace(/\/$/, '')
+  return `${base}/api/cases/${caseId}/archive`
+}
+
+export async function getManualReviews(caseId: number): Promise<ManualReview[]> {
+  const { data } = await http.get(`/api/cases/${caseId}/manual-review`)
+  return Array.isArray(data) ? data : []
+}
+
+export async function createManualReview(
+  caseId: number,
+  payload: Omit<ManualReview, 'id' | 'case_id' | 'created_at' | 'updated_at'>,
+): Promise<ManualReview> {
+  const { data } = await http.post(`/api/cases/${caseId}/manual-review`, payload)
   return data
 }
 

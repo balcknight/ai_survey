@@ -324,6 +324,9 @@ def list_cases(
     final_level: str | None = None,
     should_transfer: str | None = None,
     status: str | None = None,
+    stage_code: str | None = None,
+    bioinfo_email: str | None = None,
+    review_status: str | None = None,
 ) -> list[models.SurveyCase]:
     stmt: Select[tuple[models.SurveyCase]] = (
         select(models.SurveyCase)
@@ -331,6 +334,7 @@ def list_cases(
             joinedload(models.SurveyCase.kmer_result),
             joinedload(models.SurveyCase.nt_result),
             joinedload(models.SurveyCase.gc_result),
+            joinedload(models.SurveyCase.manual_reviews),
         )
         .order_by(models.SurveyCase.updated_at.desc(), models.SurveyCase.id.desc())
         .limit(limit)
@@ -344,6 +348,14 @@ def list_cases(
         stmt = stmt.where(models.SurveyCase.should_transfer == should_transfer)
     if status:
         stmt = stmt.where(models.SurveyCase.status == status)
+    if stage_code:
+        stmt = stmt.where(models.SurveyCase.stage_code == stage_code)
+    if bioinfo_email:
+        stmt = stmt.where(models.SurveyCase.bioinfo_emails_json.contains(bioinfo_email))
+    if review_status == "reviewed":
+        stmt = stmt.where(models.SurveyCase.manual_reviews.any())
+    elif review_status == "unreviewed":
+        stmt = stmt.where(~models.SurveyCase.manual_reviews.any())
     return list(db.execute(stmt).scalars().unique().all())
 
 
@@ -363,10 +375,22 @@ def get_case_detail(db: Session, case_id: int) -> models.SurveyCase | None:
 
 
 def to_case_summary_out(obj: models.SurveyCase) -> schemas.CaseSummaryOut:
+    bioinfo_emails_raw = from_json_text(obj.bioinfo_emails_json, None)
+    if isinstance(bioinfo_emails_raw, list):
+        bioinfo_emails = [schemas.ContactInfo(**item) for item in bioinfo_emails_raw if isinstance(item, dict)]
+    elif obj.contact_name and obj.contact_email:
+        bioinfo_emails = [schemas.ContactInfo(name=obj.contact_name, email=obj.contact_email)]
+    else:
+        bioinfo_emails = []
+
+    latest_review = obj.manual_reviews[0] if obj.manual_reviews else None
+
     return schemas.CaseSummaryOut(
         id=obj.id,
         sample_code=obj.sample_code,
         target_species=obj.target_species,
+        stage_code=obj.stage_code,
+        bioinfo_emails=bioinfo_emails,
         status=obj.status,
         kmer_pattern=obj.kmer_result.pattern if obj.kmer_result else None,
         kmer_is_normal=obj.kmer_result.is_normal if obj.kmer_result else None,
@@ -376,8 +400,35 @@ def to_case_summary_out(obj: models.SurveyCase) -> schemas.CaseSummaryOut:
         gc_heavy_contamination=obj.gc_result.heavy_contamination if obj.gc_result else None,
         final_level=obj.final_level,
         should_transfer=obj.should_transfer,
+        reviewed=latest_review is not None,
+        reviewer_name=latest_review.reviewer_name if latest_review else None,
         updated_at=obj.updated_at,
     )
+
+
+def create_manual_review(db: Session, case_id: int, payload: schemas.ManualReviewIn) -> models.ManualReview:
+    obj = models.ManualReview(
+        case_id=case_id,
+        reviewer_name=payload.reviewer_name.strip(),
+        kmer_review=payload.kmer_review,
+        nt_review=payload.nt_review,
+        gc_review=payload.gc_review,
+        final_decision=payload.final_decision,
+        note=(payload.note or "").strip() or None,
+    )
+    db.add(obj)
+    db.commit()
+    db.refresh(obj)
+    return obj
+
+
+def list_manual_reviews(db: Session, case_id: int) -> list[models.ManualReview]:
+    stmt = (
+        select(models.ManualReview)
+        .where(models.ManualReview.case_id == case_id)
+        .order_by(models.ManualReview.created_at.desc(), models.ManualReview.id.desc())
+    )
+    return list(db.execute(stmt).scalars().all())
 
 
 def to_case_detail_out(obj: models.SurveyCase) -> schemas.CaseDetailOut:

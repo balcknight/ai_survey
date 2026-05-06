@@ -191,6 +191,8 @@ class CaseSummaryOut(BaseModel):
     id: int
     sample_code: str | None = None
     target_species: str
+    stage_code: str | None = None
+    bioinfo_emails: list["ContactInfo"] = Field(default_factory=list)
     status: str
     kmer_pattern: str | None = None
     kmer_is_normal: bool | None = None
@@ -200,6 +202,8 @@ class CaseSummaryOut(BaseModel):
     gc_heavy_contamination: bool | None = None
     final_level: str | None = None
     should_transfer: str | None = None
+    reviewed: bool = False
+    reviewer_name: str | None = None
     updated_at: datetime
 
 
@@ -323,3 +327,25 @@ class RerunSurveyIn(BaseModel):
     sample_code: str | None = None
     verbose: bool = True
     confirm: bool = False
+
+
+class ManualReviewIn(BaseModel):
+    reviewer_name: str
+    kmer_review: str = Field(pattern="^(correct|incorrect|uncertain)$")
+    nt_review: str = Field(pattern="^(correct|incorrect|uncertain)$")
+    gc_review: str = Field(pattern="^(correct|incorrect|uncertain)$")
+    final_decision: str = Field(pattern="^(confirm|rerun|manual_transfer)$")
+    note: str | None = None
+
+
+class ManualReviewOut(BaseModel):
+    id: int
+    case_id: int
+    reviewer_name: str
+    kmer_review: str
+    nt_review: str
+    gc_review: str
+    final_decision: str
+    note: str | None = None
+    created_at: datetime
+    updated_at: datetime

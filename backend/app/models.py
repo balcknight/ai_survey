@@ -50,6 +50,12 @@ class SurveyCase(Base):
     result_metrics: Mapped[ResultMetrics | None] = relationship(
         "ResultMetrics", back_populates="case", uselist=False, cascade="all, delete-orphan"
     )
+    manual_reviews: Mapped[list[ManualReview]] = relationship(
+        "ManualReview",
+        back_populates="case",
+        cascade="all, delete-orphan",
+        order_by="desc(ManualReview.created_at)",
+    )
 
 
 class KmerResult(Base):
@@ -184,3 +190,25 @@ class ResultMetrics(Base):
     )
 
     case: Mapped[SurveyCase] = relationship("SurveyCase", back_populates="result_metrics")
+
+
+class ManualReview(Base):
+    __tablename__ = "manual_reviews"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    case_id: Mapped[int] = mapped_column(ForeignKey("survey_cases.id"), index=True)
+    reviewer_name: Mapped[str] = mapped_column(String(128), nullable=False)
+    kmer_review: Mapped[str] = mapped_column(String(16), nullable=False)
+    nt_review: Mapped[str] = mapped_column(String(16), nullable=False)
+    gc_review: Mapped[str] = mapped_column(String(16), nullable=False)
+    final_decision: Mapped[str] = mapped_column(String(32), nullable=False)
+    note: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False, index=True)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime,
+        default=datetime.utcnow,
+        onupdate=datetime.utcnow,
+        nullable=False,
+    )
+
+    case: Mapped[SurveyCase] = relationship("SurveyCase", back_populates="manual_reviews")

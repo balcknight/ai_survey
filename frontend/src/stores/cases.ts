@@ -1,8 +1,20 @@
 import { computed, ref } from 'vue'
 import { defineStore } from 'pinia'
 import { ElMessage } from 'element-plus'
-import { checkByPath, deleteCase, getCaseDetail, getCases, getJudgeReport, rerunSurvey, runKmer, runNt, runSurvey } from '../api/cases'
-import type { CaseDetail, CaseSummary, FileCheckResponse, JudgeReport, RunResponse } from '../types/case'
+import {
+  checkByPath,
+  createManualReview,
+  deleteCase,
+  getCaseDetail,
+  getCases,
+  getJudgeReport,
+  getManualReviews,
+  rerunSurvey,
+  runKmer,
+  runNt,
+  runSurvey,
+} from '../api/cases'
+import type { CaseDetail, CaseSummary, FileCheckResponse, JudgeReport, ManualReview, RunResponse } from '../types/case'
 
 export type RunType = 'kmer' | 'nt' | 'survey'
 
@@ -14,6 +26,7 @@ export const useCasesStore = defineStore('cases', () => {
   const selectedCaseId = ref<number | null>(null)
   const selectedCase = ref<CaseDetail | null>(null)
   const selectedJudgeReport = ref<JudgeReport | null>(null)
+  const selectedManualReviews = ref<ManualReview[]>([])
   const loadingDetail = ref(false)
   const boardDrawerVisible = ref(false)
 
@@ -25,6 +38,9 @@ export const useCasesStore = defineStore('cases', () => {
     final_level: '',
     should_transfer: '',
     status: '',
+    stage_code: '',
+    bioinfo_email: '',
+    review_status: '' as '' | 'reviewed' | 'unreviewed',
     limit: 20,
     offset: 0,
   })
@@ -43,6 +59,9 @@ export const useCasesStore = defineStore('cases', () => {
         final_level: filters.value.final_level || undefined,
         should_transfer: filters.value.should_transfer || undefined,
         status: filters.value.status || undefined,
+        stage_code: filters.value.stage_code || undefined,
+        bioinfo_email: filters.value.bioinfo_email || undefined,
+        review_status: filters.value.review_status || undefined,
       })
       list.value = Array.isArray(data.items) ? data.items : []
       total.value = Number.isFinite(data.total) ? data.total : list.value.length
@@ -62,9 +81,23 @@ export const useCasesStore = defineStore('cases', () => {
       } catch {
         selectedJudgeReport.value = null
       }
+      try {
+        selectedManualReviews.value = await getManualReviews(caseId)
+      } catch {
+        selectedManualReviews.value = []
+      }
     } finally {
       loadingDetail.value = false
     }
+  }
+
+  async function submitManualReview(
+    caseId: number,
+    payload: Omit<ManualReview, 'id' | 'case_id' | 'created_at' | 'updated_at'>,
+  ) {
+    await createManualReview(caseId, payload)
+    selectedManualReviews.value = await getManualReviews(caseId)
+    await fetchList()
   }
 
   async function checkFiles(sampleDir: string) {
@@ -156,6 +189,9 @@ export const useCasesStore = defineStore('cases', () => {
       final_level: '',
       should_transfer: '',
       status: '',
+      stage_code: '',
+      bioinfo_email: '',
+      review_status: '',
       limit: 20,
       offset: 0,
     }
@@ -168,6 +204,7 @@ export const useCasesStore = defineStore('cases', () => {
     selectedCaseId,
     selectedCase,
     selectedJudgeReport,
+    selectedManualReviews,
     loadingDetail,
     boardDrawerVisible,
     runningType,
@@ -177,6 +214,7 @@ export const useCasesStore = defineStore('cases', () => {
     hasSelection,
     fetchList,
     selectCase,
+    submitManualReview,
     checkFiles,
     runByPath,
     rerunSelectedCase,

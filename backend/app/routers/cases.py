@@ -9,7 +9,7 @@ from pathlib import Path
 import logging
 
 from fastapi import APIRouter, BackgroundTasks, Depends, File, Form, HTTPException, Query, UploadFile
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, HTMLResponse
 from sqlalchemy.orm import Session
 
 from .. import crud, schemas
@@ -338,6 +338,9 @@ def list_cases(
     final_level: str | None = None,
     should_transfer: str | None = None,
     status: str | None = None,
+    stage_code: str | None = None,
+    bioinfo_email: str | None = None,
+    review_status: str | None = Query(None, pattern="^(reviewed|unreviewed)$"),
 ):
     items = crud.list_cases(
         db=db,
@@ -347,6 +350,9 @@ def list_cases(
         final_level=final_level,
         should_transfer=should_transfer,
         status=status,
+        stage_code=stage_code,
+        bioinfo_email=bioinfo_email,
+        review_status=review_status,
     )
     return [crud.to_case_summary_out(i) for i in items]
 
@@ -421,6 +427,96 @@ def get_judge_report(case_id: int, db: Session = Depends(get_db)):
     if report is None:
         raise HTTPException(status_code=404, detail="该样本暂无判定报告")
     return report
+
+
+@router.get("/{case_id}/report-html")
+def get_case_report_html(case_id: int, db: Session = Depends(get_db)):
+    obj = crud.get_case_detail(db, case_id)
+    if obj is None:
+        raise HTTPException(status_code=404, detail="样本不存在")
+    if not obj.source_path:
+        raise HTTPException(status_code=404, detail="样本缺少 source_path，无法定位报告")
+
+    sample_dir = Path(obj.source_path).expanduser().resolve()
+    if not sample_dir.exists() or not sample_dir.is_dir():
+        raise HTTPException(status_code=404, detail="样本目录不存在")
+
+    # 仅在 sample_dir（含子目录）内查找 html 报告，优先命中包含 report/survey 关键词的文件。
+    html_candidates = [p.resolve() for p in sample_dir.rglob("*.html") if p.is_file()]
+    if not html_candidates:
+        raise HTTPException(status_code=404, detail="未找到 html 报告文件")
+
+    keyword_hits = [
+        p
+        for p in html_candidates
+        if ("report" in p.name.lower()) or ("survey" in p.name.lower()) or ("report" in str(p.parent).lower())
+    ]
+    target = sorted(keyword_hits or html_candidates)[0]
+    try:
+        target.relative_to(sample_dir)
+    except ValueError as exc:
+        raise HTTPException(status_code=403, detail="报告文件路径非法，拒绝访问") from exc
+
+    html_text = target.read_text(encoding="utf-8", errors="ignore")
+    return HTMLResponse(content=html_text, media_type="text/html; charset=utf-8")
+
+
+@router.get("/{case_id}/archive")
+def download_case_archive(case_id: int, db: Session = Depends(get_db)):
+    obj = crud.get_case_detail(db, case_id)
+    if obj is None:
+        raise HTTPException(status_code=404, detail="样本不存在")
+    if not obj.archive_path:
+        raise HTTPException(status_code=404, detail="该样本无原始压缩包")
+
+    archive_path = Path(obj.archive_path).expanduser().resolve()
+    if not archive_path.exists() or not archive_path.is_file():
+        raise HTTPException(status_code=404, detail="压缩包文件不存在")
+
+    return FileResponse(str(archive_path), media_type="application/zip", filename=archive_path.name)
+
+
+@router.get("/{case_id}/manual-review", response_model=list[schemas.ManualReviewOut])
+def get_manual_reviews(case_id: int, db: Session = Depends(get_db)):
+    obj = crud.get_case_detail(db, case_id)
+    if obj is None:
+        raise HTTPException(status_code=404, detail="样本不存在")
+    rows = crud.list_manual_reviews(db, case_id)
+    return [
+        schemas.ManualReviewOut(
+            id=row.id,
+            case_id=row.case_id,
+            reviewer_name=row.reviewer_name,
+            kmer_review=row.kmer_review,
+            nt_review=row.nt_review,
+            gc_review=row.gc_review,
+            final_decision=row.final_decision,
+            note=row.note,
+            created_at=row.created_at,
+            updated_at=row.updated_at,
+        )
+        for row in rows
+    ]
+
+
+@router.post("/{case_id}/manual-review", response_model=schemas.ManualReviewOut)
+def create_manual_review(case_id: int, payload: schemas.ManualReviewIn, db: Session = Depends(get_db)):
+    obj = crud.get_case_detail(db, case_id)
+    if obj is None:
+        raise HTTPException(status_code=404, detail="样本不存在")
+    row = crud.create_manual_review(db, case_id, payload)
+    return schemas.ManualReviewOut(
+        id=row.id,
+        case_id=row.case_id,
+        reviewer_name=row.reviewer_name,
+        kmer_review=row.kmer_review,
+        nt_review=row.nt_review,
+        gc_review=row.gc_review,
+        final_decision=row.final_decision,
+        note=row.note,
+        created_at=row.created_at,
+        updated_at=row.updated_at,
+    )
 
 
 @router.post("/run-by-path", response_model=schemas.RunByPathOut)
