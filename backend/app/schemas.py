@@ -203,7 +203,6 @@ class CaseSummaryOut(BaseModel):
     final_level: str | None = None
     should_transfer: str | None = None
     reviewed: bool = False
-    reviewer_name: str | None = None
     updated_at: datetime
 
 
@@ -330,7 +329,6 @@ class RerunSurveyIn(BaseModel):
 
 
 class ManualReviewIn(BaseModel):
-    reviewer_name: str
     kmer_review: str = Field(pattern="^(correct|incorrect|uncertain)$")
     nt_review: str = Field(pattern="^(correct|incorrect|uncertain)$")
     gc_review: str = Field(pattern="^(correct|incorrect|uncertain)$")
@@ -341,7 +339,6 @@ class ManualReviewIn(BaseModel):
 class ManualReviewOut(BaseModel):
     id: int
     case_id: int
-    reviewer_name: str
     kmer_review: str
     nt_review: str
     gc_review: str

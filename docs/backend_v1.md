@@ -55,13 +55,27 @@
 - `adjusted_json`（按倍型修正后的结果）
 - `remark`
 
+### 6. manual_reviews（1:N）
+- `id` 主键
+- `case_id` 关联 `survey_cases.id`
+- `kmer_review`（`correct|incorrect|uncertain`）
+- `nt_review`（`correct|incorrect|uncertain`）
+- `gc_review`（`correct|incorrect|uncertain`）
+- `final_decision`（`confirm|rerun|manual_transfer`）
+- `note`（审核备注）
+- `created_at` / `updated_at`
+
 ## V1 已实现接口
 - `GET /health`
-- `GET /api/cases` 列表查询（`limit/offset/target_species/final_level/should_transfer/status`）
+- `GET /api/cases` 列表查询（`limit/offset/target_species/final_level/should_transfer/status/stage_code/bioinfo_email/review_status`）
 - `GET /api/cases/{case_id}` 样本详情
 - `GET /api/cases/{case_id}/kmer-plot?spectrum=spe|num` 获取 kmer 峰图（PNG）
 - `GET /api/cases/{case_id}/gc-plot` 获取 GC 图（PNG，始终尝试生成并展示）
 - `GET /api/cases/{case_id}/judge-report` 获取判定报告（结构化+文本总结）
+- `GET /api/cases/{case_id}/report-html` 获取样本目录内 html 报告（用于前端看板展示）
+- `GET /api/cases/{case_id}/archive` 下载 run-by-archive 保存的原始压缩包
+- `GET /api/cases/{case_id}/manual-review` 获取人工审核记录（倒序）
+- `POST /api/cases/{case_id}/manual-review` 提交人工审核记录
 - `DELETE /api/cases/{case_id}` 删除样本（删除后可重新发起同路径判定）
 - `POST /api/cases/check-by-path` 只检查样本目录文件是否齐全（不执行判定）
 - `POST /api/cases/run-kmer` 输入样本目录，执行 kmer 判定并入库
@@ -89,6 +103,9 @@ SAMPLE_DIR1="data/shenshaoqi_data_v2/1"
 - `final_level`：按最终等级精确匹配
 - `should_transfer`：按是否转移精确匹配（如 `是/否`）
 - `status`：按状态精确匹配（`created|kmer_done|nt_done|judged|failed`）
+- `stage_code`：按分期编号精确匹配
+- `bioinfo_email`：按生信邮箱模糊匹配（匹配 `bioinfo_emails_json`）
+- `review_status`：人工审核状态（`reviewed|unreviewed`）
 
 #### curl 示例（可直接执行）
 ```bash

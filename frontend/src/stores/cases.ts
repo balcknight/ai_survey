@@ -174,6 +174,7 @@ export const useCasesStore = defineStore('cases', () => {
       selectedCaseId.value = null
       selectedCase.value = null
       selectedJudgeReport.value = null
+      selectedManualReviews.value = []
       boardDrawerVisible.value = false
     }
     await fetchList()

@@ -401,7 +401,6 @@ def to_case_summary_out(obj: models.SurveyCase) -> schemas.CaseSummaryOut:
         final_level=obj.final_level,
         should_transfer=obj.should_transfer,
         reviewed=latest_review is not None,
-        reviewer_name=latest_review.reviewer_name if latest_review else None,
         updated_at=obj.updated_at,
     )
 
@@ -409,7 +408,6 @@ def to_case_summary_out(obj: models.SurveyCase) -> schemas.CaseSummaryOut:
 def create_manual_review(db: Session, case_id: int, payload: schemas.ManualReviewIn) -> models.ManualReview:
     obj = models.ManualReview(
         case_id=case_id,
-        reviewer_name=payload.reviewer_name.strip(),
         kmer_review=payload.kmer_review,
         nt_review=payload.nt_review,
         gc_review=payload.gc_review,

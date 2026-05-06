@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, reactive } from 'vue'
+import { computed, onMounted, reactive, ref } from 'vue'
 import { ElMessage } from 'element-plus'
 import { useCasesStore } from '../stores/cases'
 import type { CaseSummary } from '../types/case'
@@ -11,13 +11,15 @@ type FinalDecision = 'confirm' | 'rerun' | 'manual_transfer'
 const store = useCasesStore()
 
 const reviewForm = reactive({
-  reviewer_name: '',
   kmer: 'correct' as ReviewChoice,
   nt: 'correct' as ReviewChoice,
   gc: 'correct' as ReviewChoice,
   finalDecision: 'confirm' as FinalDecision,
   note: '',
 })
+const aiDetailDialogVisible = ref(false)
+const aiDetailTitle = ref('')
+const aiDetailContent = ref('')
 
 const reviewChoiceOptions = [
   { label: '正确', value: 'correct' },
@@ -55,8 +57,6 @@ const archiveUrl = computed(() => {
   return getCaseArchiveUrl(store.selectedCaseId)
 })
 
-const latestManualReview = computed(() => store.selectedManualReviews[0] ?? null)
-
 const bioinfoNamesText = computed(() => {
   const emails = store.selectedCase?.bioinfo_emails ?? []
   if (!emails.length) return '-'
@@ -67,6 +67,22 @@ const bioinfoNamesText = computed(() => {
   return names.length ? names.join(', ') : '-'
 })
 
+function yesNoText(value: boolean | null | undefined): string {
+  if (value === true) return '是'
+  if (value === false) return '否'
+  return '-'
+}
+
+function openAiDetail(title: string, content: string | string[] | null | undefined) {
+  aiDetailTitle.value = title
+  if (Array.isArray(content)) {
+    aiDetailContent.value = content.length ? content.join('\n') : '-'
+  } else {
+    aiDetailContent.value = (content || '-').toString()
+  }
+  aiDetailDialogVisible.value = true
+}
+
 function onRowClick(row: CaseSummary) {
   store.selectCase(row.id)
 }
@@ -76,12 +92,7 @@ async function onSubmitPrototype() {
     ElMessage.warning('请先选择样本再提交审核')
     return
   }
-  if (!reviewForm.reviewer_name.trim()) {
-    ElMessage.warning('请填写审核人')
-    return
-  }
   await store.submitManualReview(store.selectedCase.id, {
-    reviewer_name: reviewForm.reviewer_name.trim(),
     kmer_review: reviewForm.kmer,
     nt_review: reviewForm.nt,
     gc_review: reviewForm.gc,
@@ -175,13 +186,44 @@ onMounted(async () => {
             <div><b>自动 should_transfer:</b> {{ store.selectedCase.should_transfer || '-' }}</div>
             <div><b>审核生信（邮箱前缀）:</b> {{ bioinfoNamesText }}</div>
             <div><b>survey.remark:</b> {{ store.selectedCase.survey_result?.remark || '-' }}</div>
-            <div><b>最近审核人:</b> {{ latestManualReview?.reviewer_name || '-' }}</div>
+          </div>
+
+          <div class="ai-judge-panel">
+            <div class="ai-judge-panel__title">AI 判定结果（供人工校对）</div>
+            <div class="ai-judge-grid">
+              <div class="ai-judge-item">
+                <div><b>kmer.pattern:</b> {{ store.selectedCase.kmer_result?.pattern || '-' }}</div>
+                <div><b>kmer.is_normal:</b> {{ yesNoText(store.selectedCase.kmer_result?.is_normal) }}</div>
+                <el-button text type="primary" @click="openAiDetail('kmer.detail', store.selectedCase.kmer_result?.detail)">
+                  查看 detail
+                </el-button>
+                <el-button
+                  text
+                  type="primary"
+                  @click="openAiDetail('kmer.warnings', store.selectedCase.kmer_result?.warnings || [])"
+                >
+                  查看 warnings
+                </el-button>
+              </div>
+              <div class="ai-judge-item">
+                <div><b>nt.nt_level:</b> {{ store.selectedCase.nt_result?.nt_level || '-' }}</div>
+                <div><b>nt.is_heavy_contamination:</b> {{ yesNoText(store.selectedCase.nt_result?.is_heavy_contamination) }}</div>
+                <el-button
+                  text
+                  type="primary"
+                  @click="openAiDetail('nt.ntspe_detail', store.selectedCase.nt_result?.ntspe_detail)"
+                >
+                  查看 ntspe_detail
+                </el-button>
+              </div>
+              <div class="ai-judge-item">
+                <div><b>gc.executed:</b> {{ yesNoText(store.selectedCase.gc_result?.executed) }}</div>
+                <div><b>gc.heavy_contamination:</b> {{ yesNoText(store.selectedCase.gc_result?.heavy_contamination) }}</div>
+              </div>
+            </div>
           </div>
 
           <el-form label-position="top" class="review-form">
-            <el-form-item label="审核人">
-              <el-input v-model="reviewForm.reviewer_name" placeholder="例如: wangwu" />
-            </el-form-item>
             <el-form-item label="kmer 结果是否正确">
               <el-radio-group v-model="reviewForm.kmer">
                 <el-radio-button v-for="item in reviewChoiceOptions" :key="item.value" :value="item.value">
@@ -256,6 +298,10 @@ onMounted(async () => {
         <el-empty v-else description="暂无可展示报告" />
       </div>
     </el-drawer>
+
+    <el-dialog v-model="aiDetailDialogVisible" :title="aiDetailTitle" width="700px">
+      <pre class="ai-detail-pre">{{ aiDetailContent }}</pre>
+    </el-dialog>
   </div>
 </template>
 
@@ -317,6 +363,33 @@ onMounted(async () => {
   background: #fafcff;
 }
 
+.ai-judge-panel {
+  margin-top: 12px;
+  padding: 10px 12px;
+  border: 1px solid #e5e9f2;
+  border-radius: 8px;
+  background: #fff;
+}
+
+.ai-judge-panel__title {
+  font-size: 14px;
+  font-weight: 600;
+  margin-bottom: 8px;
+}
+
+.ai-judge-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(120px, 1fr));
+  gap: 8px;
+}
+
+.ai-judge-item {
+  border: 1px solid #eef1f6;
+  border-radius: 6px;
+  padding: 8px;
+  background: #fafcff;
+}
+
 .review-form {
   margin-top: 12px;
 }
@@ -351,8 +424,19 @@ onMounted(async () => {
   background: #fff;
 }
 
+.ai-detail-pre {
+  white-space: pre-wrap;
+  word-break: break-word;
+  margin: 0;
+  max-height: 420px;
+  overflow: auto;
+}
+
 @media (max-width: 1200px) {
   .manual-review-page__layout {
+    grid-template-columns: 1fr;
+  }
+  .ai-judge-grid {
     grid-template-columns: 1fr;
   }
 }

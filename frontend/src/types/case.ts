@@ -7,7 +7,6 @@ export interface CaseSummary {
   stage_code?: string | null
   bioinfo_emails?: Array<{ name: string; email: string }>
   reviewed?: boolean
-  reviewer_name?: string | null
   status: CaseStatus
   kmer_pattern: string | null
   kmer_is_normal: boolean | null
@@ -159,7 +158,6 @@ export interface FileCheckResponse {
 export interface ManualReview {
   id: number
   case_id: number
-  reviewer_name: string
   kmer_review: 'correct' | 'incorrect' | 'uncertain'
   nt_review: 'correct' | 'incorrect' | 'uncertain'
   gc_review: 'correct' | 'incorrect' | 'uncertain'

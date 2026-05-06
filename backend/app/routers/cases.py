@@ -486,7 +486,6 @@ def get_manual_reviews(case_id: int, db: Session = Depends(get_db)):
         schemas.ManualReviewOut(
             id=row.id,
             case_id=row.case_id,
-            reviewer_name=row.reviewer_name,
             kmer_review=row.kmer_review,
             nt_review=row.nt_review,
             gc_review=row.gc_review,
@@ -508,7 +507,6 @@ def create_manual_review(case_id: int, payload: schemas.ManualReviewIn, db: Sess
     return schemas.ManualReviewOut(
         id=row.id,
         case_id=row.case_id,
-        reviewer_name=row.reviewer_name,
         kmer_review=row.kmer_review,
         nt_review=row.nt_review,
         gc_review=row.gc_review,
