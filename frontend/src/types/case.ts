@@ -7,6 +7,7 @@ export interface CaseSummary {
   stage_code?: string | null
   bioinfo_emails?: Array<{ name: string; email: string }>
   reviewed?: boolean
+  review_final_decision?: 'transfer' | 'no_transfer' | 'confirm' | 'rerun' | 'manual_transfer' | null
   status: CaseStatus
   kmer_pattern: string | null
   kmer_is_normal: boolean | null
@@ -161,7 +162,7 @@ export interface ManualReview {
   kmer_review: 'correct' | 'incorrect' | 'uncertain'
   nt_review: 'correct' | 'incorrect' | 'uncertain'
   gc_review: 'correct' | 'incorrect' | 'uncertain'
-  final_decision: 'confirm' | 'rerun' | 'manual_transfer'
+  final_decision: 'transfer' | 'no_transfer' | 'confirm' | 'rerun' | 'manual_transfer'
   note: string | null
   created_at: string
   updated_at: string

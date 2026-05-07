@@ -197,6 +197,8 @@ class ManualReview(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     case_id: Mapped[int] = mapped_column(ForeignKey("survey_cases.id"), index=True)
+    # 兼容历史库结构：旧库 reviewer_name 可能是 NOT NULL。
+    reviewer_name: Mapped[str] = mapped_column(String(128), nullable=False, default="system")
     kmer_review: Mapped[str] = mapped_column(String(16), nullable=False)
     nt_review: Mapped[str] = mapped_column(String(16), nullable=False)
     gc_review: Mapped[str] = mapped_column(String(16), nullable=False)

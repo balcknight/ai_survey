@@ -14,7 +14,7 @@ const router = useRouter()
     <header class="workbench-page__header">
       <div class="workbench-page__header-top">
         <h1>Survey 判定工作台</h1>
-        <el-button type="primary" plain @click="router.push('/review-prototype')">进入人工审核原型</el-button>
+        <el-button type="primary" plain @click="router.push('/review-prototype')">进入人工审核</el-button>
       </div>
       <p>支持按路径执行 kmer / nt / survey，点击样本后以抽屉形式展示详情看板。</p>
     </header>

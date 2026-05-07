@@ -401,17 +401,28 @@ def to_case_summary_out(obj: models.SurveyCase) -> schemas.CaseSummaryOut:
         final_level=obj.final_level,
         should_transfer=obj.should_transfer,
         reviewed=latest_review is not None,
+        review_final_decision=latest_review.final_decision if latest_review else None,
         updated_at=obj.updated_at,
     )
 
 
 def create_manual_review(db: Session, case_id: int, payload: schemas.ManualReviewIn) -> models.ManualReview:
+    # 兼容历史枚举：confirm/rerun/manual_transfer；新前端统一为 transfer/no_transfer。
+    decision = payload.final_decision
+    if decision in ("confirm", "no_transfer"):
+        normalized_decision = "no_transfer"
+    elif decision in ("rerun", "manual_transfer", "transfer"):
+        normalized_decision = "transfer"
+    else:
+        normalized_decision = decision
+
     obj = models.ManualReview(
         case_id=case_id,
+        reviewer_name="system",
         kmer_review=payload.kmer_review,
         nt_review=payload.nt_review,
         gc_review=payload.gc_review,
-        final_decision=payload.final_decision,
+        final_decision=normalized_decision,
         note=(payload.note or "").strip() or None,
     )
     db.add(obj)

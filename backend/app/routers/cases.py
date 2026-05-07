@@ -499,11 +499,23 @@ def get_manual_reviews(case_id: int, db: Session = Depends(get_db)):
 
 
 @router.post("/{case_id}/manual-review", response_model=schemas.ManualReviewOut)
-def create_manual_review(case_id: int, payload: schemas.ManualReviewIn, db: Session = Depends(get_db)):
+def create_manual_review(
+    case_id: int,
+    payload: schemas.ManualReviewIn,
+    background_tasks: BackgroundTasks,
+    db: Session = Depends(get_db),
+):
     obj = crud.get_case_detail(db, case_id)
     if obj is None:
         raise HTTPException(status_code=404, detail="样本不存在")
     row = crud.create_manual_review(db, case_id, payload)
+    detail = crud.to_case_detail_out(obj)
+    _enqueue_survey_done_email(
+        background_tasks,
+        case_detail=detail,
+        sample_dir=detail.source_path or "未提供",
+        judge_report=_build_judge_report_payload(detail),
+    )
     return schemas.ManualReviewOut(
         id=row.id,
         case_id=row.case_id,

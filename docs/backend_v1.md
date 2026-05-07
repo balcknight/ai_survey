@@ -61,7 +61,7 @@
 - `kmer_review`（`correct|incorrect|uncertain`）
 - `nt_review`（`correct|incorrect|uncertain`）
 - `gc_review`（`correct|incorrect|uncertain`）
-- `final_decision`（`confirm|rerun|manual_transfer`）
+- `final_decision`（存储归一化后的 `transfer|no_transfer`）
 - `note`（审核备注）
 - `created_at` / `updated_at`
 
@@ -76,6 +76,8 @@
 - `GET /api/cases/{case_id}/archive` 下载 run-by-archive 保存的原始压缩包
 - `GET /api/cases/{case_id}/manual-review` 获取人工审核记录（倒序）
 - `POST /api/cases/{case_id}/manual-review` 提交人工审核记录
+  - `final_decision` 入参兼容：`transfer|no_transfer|confirm|rerun|manual_transfer`
+  - 后端会归一化存储为：`transfer|no_transfer`
 - `DELETE /api/cases/{case_id}` 删除样本（删除后可重新发起同路径判定）
 - `POST /api/cases/check-by-path` 只检查样本目录文件是否齐全（不执行判定）
 - `POST /api/cases/run-kmer` 输入样本目录，执行 kmer 判定并入库
@@ -314,7 +316,7 @@ curl -X POST "$BASE_URL/api/cases/rerun-survey" \
 
 #### curl 示例
 ```bash
-curl -X GET "$BASE_URL/api/cases/12/judge-report"
+curl -X GET "http://192.168.20.24:8001/api/cases/12/judge-report"
 ```
 
 #### curl 示例
@@ -509,7 +511,7 @@ export MAIL_CASE_LIST_URL="http://192.168.20.24:5173/cases"
 
 说明：
 - `MAIL_ENABLED=false` 时不发送邮件，仅执行判定与入库。
-- `MAIL_ENABLED=true` 时，在 `run-survey`、`rerun-survey`、`run-by-path`、`run-by-archive` 成功后异步发送提醒邮件（失败不影响主流程）。
+- `MAIL_ENABLED=true` 时，在 `run-survey`、`rerun-survey`、`run-by-path`、`run-by-archive` 成功后，以及 `manual-review` 入库成功后，异步发送提醒邮件（失败不影响主流程）。
 - `MAIL_TO` 当前先固定 `zhurui8901@novogene.com`，后续可改为动态收件策略。
 
 启动后端：

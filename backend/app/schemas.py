@@ -203,6 +203,7 @@ class CaseSummaryOut(BaseModel):
     final_level: str | None = None
     should_transfer: str | None = None
     reviewed: bool = False
+    review_final_decision: str | None = None
     updated_at: datetime
 
 
@@ -332,7 +333,7 @@ class ManualReviewIn(BaseModel):
     kmer_review: str = Field(pattern="^(correct|incorrect|uncertain)$")
     nt_review: str = Field(pattern="^(correct|incorrect|uncertain)$")
     gc_review: str = Field(pattern="^(correct|incorrect|uncertain)$")
-    final_decision: str = Field(pattern="^(confirm|rerun|manual_transfer)$")
+    final_decision: str = Field(pattern="^(transfer|no_transfer|confirm|rerun|manual_transfer)$")
     note: str | None = None
 
 
