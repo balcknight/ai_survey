@@ -4,6 +4,7 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import { useCasesStore } from '../stores/cases'
 import type { CaseSummary } from '../types/case'
 import { getCaseArchiveUrl, getCaseReportHtmlUrl } from '../api/cases'
+import CaseBoard from '../components/workbench/CaseBoard.vue'
 
 type ReviewChoice = 'correct' | 'incorrect' | 'uncertain'
 type FinalDecision = 'transfer' | 'no_transfer'
@@ -36,7 +37,7 @@ const selectedCaseTitle = computed(() => {
   return store.selectedCase.sample_code || `Case #${store.selectedCase.id}`
 })
 
-const leftPaneMode = ref<'list' | 'report'>('list')
+const leftPaneMode = ref<'list' | 'report' | 'ai'>('list')
 const leftPaneWidth = ref(44)
 const resizing = ref(false)
 
@@ -82,7 +83,7 @@ function openAiDetail(title: string, content: string | string[] | null | undefin
 
 function onRowClick(row: CaseSummary) {
   store.selectCase(row.id)
-  leftPaneMode.value = 'list'
+  leftPaneMode.value = 'ai'
 }
 
 async function onSubmitPrototype() {
@@ -221,7 +222,15 @@ watch(
       <el-card shadow="never" class="manual-review-page__list">
         <template #header>
           <div class="panel-title panel-title--with-actions">
-            <span>{{ leftPaneMode === 'list' ? '待审核样本' : '报告' }}</span>
+            <span>
+              {{
+                leftPaneMode === 'list'
+                  ? '待审核样本'
+                  : leftPaneMode === 'report'
+                    ? '报告'
+                    : 'AI 自动判定'
+              }}
+            </span>
             <div class="panel-title-actions">
               <el-button size="small" :type="leftPaneMode === 'list' ? 'primary' : 'default'" @click="leftPaneMode = 'list'">
                 样本
@@ -233,6 +242,14 @@ watch(
                 @click="leftPaneMode = 'report'"
               >
                 报告
+              </el-button>
+              <el-button
+                size="small"
+                :type="leftPaneMode === 'ai' ? 'primary' : 'default'"
+                :disabled="!store.selectedCaseId"
+                @click="leftPaneMode = 'ai'"
+              >
+                AI 自动判定
               </el-button>
             </div>
           </div>
@@ -279,7 +296,7 @@ watch(
           </el-table-column>
           </el-table>
         </template>
-        <template v-else>
+        <template v-else-if="leftPaneMode === 'report'">
           <div class="report-board">
             <div class="report-board__title">
               <span>报告看板（{{ selectedCaseTitle }}）</span>
@@ -294,6 +311,11 @@ watch(
               title="survey-report-html"
             />
             <el-empty v-else description="暂无可展示报告" />
+          </div>
+        </template>
+        <template v-else>
+          <div class="ai-board-wrapper">
+            <CaseBoard />
           </div>
         </template>
       </el-card>
@@ -719,6 +741,11 @@ watch(
   background: #fff;
 }
 
+.ai-board-wrapper {
+  height: calc(100vh - 200px);
+  overflow: auto;
+}
+
 .splitter {
   background: #dcdfe6;
   border-radius: 8px;
@@ -807,6 +834,10 @@ watch(
   }
   .auto-result {
     grid-template-columns: 1fr;
+  }
+  .ai-board-wrapper {
+    height: auto;
+    max-height: none;
   }
   .review-decision-bar {
     flex-direction: column;
