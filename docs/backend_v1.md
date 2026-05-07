@@ -97,7 +97,7 @@ SAMPLE_DIR1="data/shenshaoqi_data_v2/1"
 
 ## 接口说明
 
-### 0) 列表查询（GET /api/cases）
+### 1) 列表查询（GET /api/cases）
 #### 请求参数
 - `limit`：返回条数，默认 `20`，范围 `1~200`
 - `offset`：偏移量，默认 `0`
@@ -109,45 +109,50 @@ SAMPLE_DIR1="data/shenshaoqi_data_v2/1"
 - `bioinfo_email`：按生信邮箱模糊匹配（匹配 `bioinfo_emails_json`）
 - `review_status`：人工审核状态（`reviewed|unreviewed`）
 
-#### curl 示例（可直接执行）
+### 2) 样本详情（GET /api/cases/{case_id}）
+#### 说明
+- 返回单个样本完整详情，包含 `kmer_result/nt_result/gc_result/survey_result/result_metrics/manual_reviews` 等关联数据。
+
+### 3) 获取 kmer 峰图（GET /api/cases/{case_id}/kmer-plot）
+#### 请求参数
+- `spectrum`：`spe` 或 `num`
+
+### 4) 获取 GC 图（GET /api/cases/{case_id}/gc-plot）
+#### 说明
+- 返回已生成的 GC 图 PNG。
+- 若未生成或路径非法，接口返回 404/403。
+
+### 5) 获取判定报告（GET /api/cases/{case_id}/judge-report）
+#### 说明
+- 根据已入库的 `kmer_result/nt_result/result_metrics/survey_result` 自动填充判定报告。
+- 该接口不触发重算，仅做结果组织与文本生成。
+
+#### curl 示例
 ```bash
-# 基础分页（第一页）
-curl -G "$BASE_URL/api/cases" \
-  --data-urlencode "limit=20" \
-  --data-urlencode "offset=0"
-
-# 分页（第二页）
-curl -G "$BASE_URL/api/cases" \
-  --data-urlencode "limit=20" \
-  --data-urlencode "offset=20"
-
-# 按目标物种筛选（模糊匹配）
-curl -G "$BASE_URL/api/cases" \
-  --data-urlencode "target_species=手掌参"
-
-# 按最终等级筛选
-curl -G "$BASE_URL/api/cases" \
-  --data-urlencode "final_level=重度污染"
-
-# 按是否转移筛选
-curl -G "$BASE_URL/api/cases" \
-  --data-urlencode "should_transfer=否"
-
-# 按状态筛选
-curl -G "$BASE_URL/api/cases" \
-  --data-urlencode "status=judged"
-
-# 组合筛选（推荐）
-curl -G "$BASE_URL/api/cases" \
-  --data-urlencode "target_species=手掌参" \
-  --data-urlencode "final_level=重度污染" \
-  --data-urlencode "should_transfer=否" \
-  --data-urlencode "status=judged" \
-  --data-urlencode "limit=20" \
-  --data-urlencode "offset=0"
+curl -X GET "http://192.168.20.24:8001/api/cases/12/judge-report"
 ```
 
-### 1) 检查文件但不执行（POST /api/cases/check-by-path）
+### 6) 获取样本 HTML 报告（GET /api/cases/{case_id}/report-html）
+#### 说明
+- 在样本目录内查找 `.html` 报告并返回内容。
+
+### 7) 获取原始压缩包（GET /api/cases/{case_id}/archive）
+#### 说明
+- 仅适用于 `run-by-archive` 入库的样本。
+
+### 8) 获取人工审核记录（GET /api/cases/{case_id}/manual-review）
+#### 说明
+- 按创建时间倒序返回该样本的人工审核历史。
+
+### 9) 提交人工审核记录（POST /api/cases/{case_id}/manual-review）
+#### 请求参数
+- `kmer_review`：`correct|incorrect|uncertain`
+- `nt_review`：`correct|incorrect|uncertain`
+- `gc_review`：`correct|incorrect|uncertain`
+- `final_decision`：`transfer|no_transfer|confirm|rerun|manual_transfer`
+- `note`：备注
+
+### 10) 检查文件但不执行（POST /api/cases/check-by-path）
 #### 请求参数
 - `sample_dir`：样本目录绝对路径或相对路径
 
@@ -185,7 +190,7 @@ curl -X POST "$BASE_URL/api/cases/check-by-path" \
 }
 ```
 
-### 2) run-kmer（POST /api/cases/run-kmer）
+### 11) run-kmer（POST /api/cases/run-kmer）
 #### 请求参数
 - `sample_dir`：样本目录
 - `sample_code`：样本编号（可选；未传或传空字符串时，默认取 `sample_dir` 最后一级目录名）
@@ -203,7 +208,7 @@ curl -X POST "$BASE_URL/api/cases/run-kmer" \
   }"
 ```
 
-### 3) run-nt（POST /api/cases/run-nt）
+### 12) run-nt（POST /api/cases/run-nt）
 #### 请求参数
 - 同 `run-kmer`
 
@@ -218,7 +223,7 @@ curl -X POST "$BASE_URL/api/cases/run-nt" \
   }"
 ```
 
-### 4) run-survey（POST /api/cases/run-survey，推荐前端主按钮）
+### 13) run-survey（POST /api/cases/run-survey，推荐前端主按钮）
 #### 请求参数
 - 同 `run-kmer`
 
@@ -233,7 +238,7 @@ curl -X POST "$BASE_URL/api/cases/run-survey" \
   }"
 ```
 
-### 5) run-by-path（POST /api/cases/run-by-path，兼容接口）
+### 14) run-by-path（POST /api/cases/run-by-path，兼容接口）
 #### 请求参数
 - 同 `run-survey`
 
@@ -260,7 +265,7 @@ curl -X POST "$BASE_URL/api/cases/run-by-path" \
   }"
 ```
 
-### 6) rerun-survey（POST /api/cases/rerun-survey，显式确认覆盖）
+### 15) rerun-survey（POST /api/cases/rerun-survey，显式确认覆盖）
 #### 请求参数
 - `sample_dir`：样本目录（必须已存在历史记录）
 - `sample_code`：样本编号（可选；未传或传空字符串时，默认取 `sample_dir` 最后一级目录名）
@@ -279,7 +284,7 @@ curl -X POST "$BASE_URL/api/cases/rerun-survey" \
   }"
 ```
 
-### 7) run-by-archive（POST /api/cases/run-by-archive，外部上传压缩包）
+### 16) run-by-archive（POST /api/cases/run-by-archive，外部上传压缩包）
 #### 请求参数（`multipart/form-data`）
 - `archive`：样本文件压缩包（仅支持 `.zip`）
 - `stage_code`：分期编号
@@ -308,16 +313,6 @@ curl -X POST "$BASE_URL/api/cases/rerun-survey" \
 - 后续与现有 `run-by-path` 一致：检查文件完整性 -> 执行 survey 判定 -> 入库
 - 额外参数会写入 `survey_cases`：`stage_code/bioinfo_emails_json/operation_emails_json/group_emails_json/archive_path`
 - 返回中包含 `judge_report`（同 `run-by-path`）
-
-### 8) judge-report（GET /api/cases/{case_id}/judge-report）
-#### 说明
-- 根据已入库的 `kmer_result/nt_result/result_metrics/survey_result` 自动填充判定报告。
-- 该接口不触发重算，仅做结果组织与文本生成。
-
-#### curl 示例
-```bash
-curl -X GET "http://192.168.20.24:8001/api/cases/12/judge-report"
-```
 
 #### curl 示例
 ```bash
@@ -363,16 +358,7 @@ curl -X POST "$BASE_URL/api/cases/run-by-archive" \
 }
 ```
 
-### 8) 获取 kmer 峰图（GET /api/cases/{case_id}/kmer-plot）
-#### 请求参数
-- `spectrum`：`spe` 或 `num`
-
-#### curl 示例
-```bash
-curl -L "$BASE_URL/api/cases/12/kmer-plot?spectrum=spe" --output spe_plot.png
-```
-
-### 9) 删除样本（DELETE /api/cases/{case_id}）
+### 17) 删除样本（DELETE /api/cases/{case_id}）
 #### curl 示例
 ```bash
 curl -X DELETE "$BASE_URL/api/cases/12"
