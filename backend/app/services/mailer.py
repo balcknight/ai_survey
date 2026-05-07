@@ -16,6 +16,7 @@ def send_survey_done_email(
     sample_dir: str,
     transfer_suggestion: str | None,
     summary_text: str | None,
+    body_text: str | None = None,
 ) -> None:
     settings = get_mail_settings()
     logger.info(
@@ -44,18 +45,21 @@ def send_survey_done_email(
         return
 
     subject = f"{settings.subject_prefix} case_id={case_id} 判定完成"
-    lines = [
-        "Survey 判定已完成，请及时查看结果。",
-        "",
-        f"样本编号: {sample_code or '未提供'}",
-        f"case_id: {case_id}",
-        f"样本目录: {sample_dir}",
-        f"流转建议: {transfer_suggestion or '未提供'}",
-        f"判定摘要: {summary_text or '未提供'}",
-        "",
-        f"前端查看地址: {settings.case_list_url}",
-    ]
-    body = "\n".join(lines)
+    if body_text is not None:
+        body = body_text.strip() or "（无备注）"
+    else:
+        lines = [
+            "Survey 判定已完成，请及时查看结果。",
+            "",
+            f"样本编号: {sample_code or '未提供'}",
+            f"case_id: {case_id}",
+            f"样本目录: {sample_dir}",
+            f"流转建议: {transfer_suggestion or '未提供'}",
+            f"判定摘要: {summary_text or '未提供'}",
+            "",
+            f"前端查看地址: {settings.case_list_url}",
+        ]
+        body = "\n".join(lines)
 
     message = EmailMessage()
     message["Subject"] = subject

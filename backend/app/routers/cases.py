@@ -284,6 +284,7 @@ def _enqueue_survey_done_email(
     case_detail: schemas.CaseDetailOut,
     sample_dir: str,
     judge_report: schemas.JudgeReportOut | None,
+    body_text: str | None = None,
 ) -> None:
     logger.info("已加入邮件提醒后台任务: case_id=%s, sample_dir=%s", case_detail.id, sample_dir)
 
@@ -295,6 +296,7 @@ def _enqueue_survey_done_email(
                 sample_dir=sample_dir,
                 transfer_suggestion=judge_report.transfer_suggestion if judge_report else None,
                 summary_text=judge_report.summary_text if judge_report else None,
+                body_text=body_text,
             )
         except Exception as exc:
             logger.exception("邮件提醒发送失败: case_id=%s, error=%s", case_detail.id, exc)
@@ -515,6 +517,7 @@ def create_manual_review(
         case_detail=detail,
         sample_dir=detail.source_path or "未提供",
         judge_report=_build_judge_report_payload(detail),
+        body_text=payload.note,
     )
     return schemas.ManualReviewOut(
         id=row.id,

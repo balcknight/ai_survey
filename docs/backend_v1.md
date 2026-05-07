@@ -511,7 +511,7 @@ export MAIL_CASE_LIST_URL="http://192.168.20.24:5173/cases"
 
 说明：
 - `MAIL_ENABLED=false` 时不发送邮件，仅执行判定与入库。
-- `MAIL_ENABLED=true` 时，在 `run-survey`、`rerun-survey`、`run-by-path`、`run-by-archive` 成功后，以及 `manual-review` 入库成功后，异步发送提醒邮件（失败不影响主流程）。
+- `MAIL_ENABLED=true` 时，在 `run-survey`、`rerun-survey`、`run-by-path`、`run-by-archive` 成功后异步发送提醒邮件；`manual-review` 入库成功后会把备注内容作为邮件正文发送（失败不影响主流程）。
 - `MAIL_TO` 当前先固定 `zhurui8901@novogene.com`，后续可改为动态收件策略。
 
 启动后端：
@@ -522,6 +522,7 @@ conda run -n zhurui_agent python -m uvicorn backend.app.main:app --host 0.0.0.0 
 后台运行方式：
 ```bash
 mkdir -p logs
+conda activate zhurui_agent
 nohup python -m uvicorn backend.app.main:app --host 0.0.0.0 --reload --port 8001 > logs/backend_dev.log 2>&1 &
 echo $! > logs/backend_dev.pid
 ```
