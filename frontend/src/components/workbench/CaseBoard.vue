@@ -330,6 +330,13 @@ async function onDelete() {
   grid-template-columns: repeat(2, minmax(180px, 1fr));
   gap: 8px 16px;
   font-size: 13px;
+  align-items: start;
+}
+
+.kv-grid > div {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 .span-2 {

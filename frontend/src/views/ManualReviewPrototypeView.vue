@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref, watch } from 'vue'
+import { computed, nextTick, onMounted, reactive, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { useCasesStore } from '../stores/cases'
 import type { CaseSummary } from '../types/case'
@@ -40,11 +40,17 @@ const selectedCaseTitle = computed(() => {
 const leftPaneMode = ref<'list' | 'report' | 'ai'>('list')
 const leftPaneWidth = ref(44)
 const resizing = ref(false)
+const reportIframeRefs = ref<Record<number, HTMLIFrameElement | null>>({})
+const reportLoadedByCase = reactive<Record<number, boolean>>({})
+const reportLruOrder = ref<number[]>([])
+const REPORT_LRU_LIMIT = 5
 
 const reportHtmlUrl = computed(() => {
   if (!store.selectedCaseId) return ''
   return getCaseReportHtmlUrl(store.selectedCaseId)
 })
+
+const reportCacheCaseIds = computed(() => reportLruOrder.value.filter((id) => !!id))
 
 const layoutStyle = computed(() => ({
   gridTemplateColumns: `${leftPaneWidth.value}% 8px minmax(420px, 1fr)`,
@@ -83,7 +89,44 @@ function openAiDetail(title: string, content: string | string[] | null | undefin
 
 function onRowClick(row: CaseSummary) {
   store.selectCase(row.id)
-  leftPaneMode.value = 'ai'
+}
+
+function touchReportCache(caseId: number) {
+  const next = reportLruOrder.value.filter((id) => id !== caseId)
+  next.unshift(caseId)
+  while (next.length > REPORT_LRU_LIMIT) {
+    const removed = next.pop()
+    if (removed) {
+      delete reportLoadedByCase[removed]
+      delete reportIframeRefs.value[removed]
+    }
+  }
+  reportLruOrder.value = next
+}
+
+function registerReportIframe(caseId: number, el: Element | null) {
+  reportIframeRefs.value[caseId] = (el as HTMLIFrameElement | null) ?? null
+}
+
+function onReportIframeLoad(caseId: number) {
+  reportLoadedByCase[caseId] = true
+}
+
+async function ensureReportPrefetch(caseId: number | null | undefined) {
+  if (!caseId) return
+  touchReportCache(caseId)
+  await nextTick()
+  const iframeEl = reportIframeRefs.value[caseId]
+  if (!iframeEl) return
+  const current = iframeEl.getAttribute('src') || ''
+  const target = getCaseReportHtmlUrl(caseId)
+  if (!current) {
+    iframeEl.setAttribute('src', target)
+    return
+  }
+  if (current !== target) {
+    iframeEl.setAttribute('src', target)
+  }
 }
 
 async function onSubmitPrototype() {
@@ -209,6 +252,23 @@ watch(
     }, 250)
   },
 )
+
+watch(
+  () => store.selectedCaseId,
+  async (caseId) => {
+    await ensureReportPrefetch(caseId)
+  },
+  { immediate: true },
+)
+
+watch(
+  () => leftPaneMode.value,
+  async (mode) => {
+    if (mode === 'report') {
+      await ensureReportPrefetch(store.selectedCaseId)
+    }
+  },
+)
 </script>
 
 <template>
@@ -254,7 +314,7 @@ watch(
             </div>
           </div>
         </template>
-        <template v-if="leftPaneMode === 'list'">
+        <div v-show="leftPaneMode === 'list'">
           <div class="filters">
           <el-input v-model="store.filters.stage_code" clearable placeholder="stage_code" />
           <el-input v-model="store.filters.bioinfo_email" clearable placeholder="bioinfo_email" />
@@ -295,29 +355,33 @@ watch(
             </template>
           </el-table-column>
           </el-table>
-        </template>
-        <template v-else-if="leftPaneMode === 'report'">
-          <div class="report-board">
+        </div>
+        <div v-show="leftPaneMode === 'report'" class="report-board">
             <div class="report-board__title">
               <span>报告看板（{{ selectedCaseTitle }}）</span>
               <a v-if="archiveUrl" :href="archiveUrl" target="_blank" rel="noopener">
                 <el-button size="small">下载原始压缩包</el-button>
               </a>
             </div>
-            <iframe
-              v-if="reportHtmlUrl"
-              :src="reportHtmlUrl"
-              class="report-board__frame"
-              title="survey-report-html"
-            />
-            <el-empty v-else description="暂无可展示报告" />
+            <div v-if="!reportCacheCaseIds.length" class="report-board__empty">
+              <el-empty description="暂无可展示报告" />
+            </div>
+            <div v-else class="report-board__cache-stack">
+              <iframe
+                v-for="caseId in reportCacheCaseIds"
+                :key="`report-${caseId}`"
+                :ref="(el) => registerReportIframe(caseId, el)"
+                :src="getCaseReportHtmlUrl(caseId)"
+                class="report-board__frame"
+                :class="{ 'report-board__frame--active': caseId === store.selectedCaseId }"
+                title="survey-report-html"
+                @load="onReportIframeLoad(caseId)"
+              />
+            </div>
           </div>
-        </template>
-        <template v-else>
-          <div class="ai-board-wrapper">
-            <CaseBoard />
-          </div>
-        </template>
+        <div v-show="leftPaneMode === 'ai'" class="ai-board-wrapper">
+          <CaseBoard />
+        </div>
       </el-card>
 
       <div class="splitter" :class="{ 'splitter--active': resizing }" @mousedown="startResize" />
@@ -724,6 +788,17 @@ watch(
   gap: 8px;
 }
 
+.report-board__cache-stack {
+  position: relative;
+  height: calc(100vh - 200px);
+}
+
+.report-board__empty {
+  height: calc(100vh - 200px);
+  display: grid;
+  place-items: center;
+}
+
 .report-board__title {
   font-size: 16px;
   font-weight: 600;
@@ -734,11 +809,18 @@ watch(
 }
 
 .report-board__frame {
+  position: absolute;
+  inset: 0;
   width: 100%;
-  height: calc(100vh - 200px);
+  height: 100%;
   border: 1px solid #dcdfe6;
   border-radius: 8px;
   background: #fff;
+  display: none;
+}
+
+.report-board__frame--active {
+  display: block;
 }
 
 .ai-board-wrapper {
