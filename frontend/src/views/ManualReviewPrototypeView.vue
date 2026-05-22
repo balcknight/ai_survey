@@ -472,7 +472,7 @@ watch(
                 </div>
                 <div v-else class="card-review-row card-review-row--muted">
                   <span class="review-ai-hint">人工确认</span>
-                  <span class="review-skip-text">GC 未执行，无需确认</span>
+                  <span class="review-skip-text">kmer、NT 结论一致，GC 不参与判定</span>
                 </div>
               </div>
             </div>
@@ -513,6 +513,9 @@ watch(
                 show-word-limit
                 placeholder="请记录人工判断依据、疑点、后续建议"
               />
+              <div class="review-note-guide">
+                生信可重点审核 AI 判定结果准确性（可点击“AI 自动判定”和“原始报告”查看详情）。若发现不准确，请修改预制审核备注，最终将作为邮件正文发送。
+              </div>
             </el-form-item>
           </el-form>
         </template>
@@ -779,6 +782,13 @@ watch(
 
 .review-note-input {
   width: 100%;
+}
+
+.review-note-guide {
+  margin-top: 8px;
+  font-size: 12px;
+  line-height: 1.6;
+  color: #667085;
 }
 
 .report-board {

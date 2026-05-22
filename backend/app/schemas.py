@@ -207,6 +207,13 @@ class CaseSummaryOut(BaseModel):
     updated_at: datetime
 
 
+class CaseListOut(BaseModel):
+    items: list[CaseSummaryOut]
+    total: int
+    limit: int
+    offset: int
+
+
 class CaseDetailOut(BaseModel):
     id: int
     sample_code: str | None = None

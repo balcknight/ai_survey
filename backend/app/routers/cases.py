@@ -331,7 +331,7 @@ def _parse_group_emails(group_emails_text: str | None) -> list[str]:
     return [i.strip() for i in text.split(",") if i.strip()]
 
 
-@router.get("", response_model=list[schemas.CaseSummaryOut])
+@router.get("", response_model=schemas.CaseListOut)
 def list_cases(
     db: Session = Depends(get_db),
     limit: int = Query(20, ge=1, le=200),
@@ -356,7 +356,22 @@ def list_cases(
         bioinfo_email=bioinfo_email,
         review_status=review_status,
     )
-    return [crud.to_case_summary_out(i) for i in items]
+    total = crud.count_cases(
+        db=db,
+        target_species=target_species,
+        final_level=final_level,
+        should_transfer=should_transfer,
+        status=status,
+        stage_code=stage_code,
+        bioinfo_email=bioinfo_email,
+        review_status=review_status,
+    )
+    return schemas.CaseListOut(
+        items=[crud.to_case_summary_out(i) for i in items],
+        total=total,
+        limit=limit,
+        offset=offset,
+    )
 
 
 @router.get("/{case_id}", response_model=schemas.CaseDetailOut)

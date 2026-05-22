@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from sqlalchemy import Select, select
+from sqlalchemy import Select, func, select
 from sqlalchemy.orm import Session, joinedload
 
 from . import models, schemas
@@ -357,6 +357,36 @@ def list_cases(
     elif review_status == "unreviewed":
         stmt = stmt.where(~models.SurveyCase.manual_reviews.any())
     return list(db.execute(stmt).scalars().unique().all())
+
+
+def count_cases(
+    db: Session,
+    target_species: str | None = None,
+    final_level: str | None = None,
+    should_transfer: str | None = None,
+    status: str | None = None,
+    stage_code: str | None = None,
+    bioinfo_email: str | None = None,
+    review_status: str | None = None,
+) -> int:
+    stmt = select(func.count(models.SurveyCase.id))
+    if target_species:
+        stmt = stmt.where(models.SurveyCase.target_species.contains(target_species))
+    if final_level:
+        stmt = stmt.where(models.SurveyCase.final_level == final_level)
+    if should_transfer:
+        stmt = stmt.where(models.SurveyCase.should_transfer == should_transfer)
+    if status:
+        stmt = stmt.where(models.SurveyCase.status == status)
+    if stage_code:
+        stmt = stmt.where(models.SurveyCase.stage_code == stage_code)
+    if bioinfo_email:
+        stmt = stmt.where(models.SurveyCase.bioinfo_emails_json.contains(bioinfo_email))
+    if review_status == "reviewed":
+        stmt = stmt.where(models.SurveyCase.manual_reviews.any())
+    elif review_status == "unreviewed":
+        stmt = stmt.where(~models.SurveyCase.manual_reviews.any())
+    return db.execute(stmt).scalar_one()
 
 
 def get_case_detail(db: Session, case_id: int) -> models.SurveyCase | None:
