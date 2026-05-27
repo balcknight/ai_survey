@@ -91,6 +91,18 @@ function onRowClick(row: CaseSummary) {
   store.selectCase(row.id)
 }
 
+const currentPage = computed({
+  get: () => Math.floor(store.filters.offset / store.filters.limit) + 1,
+  set: (page: number) => {
+    store.filters.offset = (page - 1) * store.filters.limit
+  },
+})
+
+async function onPageChange(page: number) {
+  currentPage.value = page
+  await store.fetchList()
+}
+
 function touchReportCache(caseId: number) {
   const next = reportLruOrder.value.filter((id) => id !== caseId)
   next.unshift(caseId)
@@ -206,7 +218,7 @@ const listStatusText = computed(() => {
   const hh = `${lastRefreshedAt.value.getHours()}`.padStart(2, '0')
   const mm = `${lastRefreshedAt.value.getMinutes()}`.padStart(2, '0')
   const ss = `${lastRefreshedAt.value.getSeconds()}`.padStart(2, '0')
-  return `已更新 ${hh}:${mm}:${ss}`
+  return `已更新 ${hh}:${mm}:${ss}，共 ${store.total} 条记录`
 })
 
 async function refreshListWithStatus() {
@@ -231,14 +243,25 @@ onMounted(async () => {
 })
 
 watch(
-  () => [store.selectedCaseId, store.selectedCase?.should_transfer, store.selectedJudgeReport?.summary_text] as const,
-  ([caseId, shouldTransfer, summary]) => {
+  () => [store.selectedCaseId, store.selectedCase?.should_transfer, store.selectedJudgeReport?.summary_text, store.selectedManualReviews] as const,
+  ([caseId, shouldTransfer, summary, manualReviews]) => {
     if (!caseId || !summary) return
-    reviewForm.kmer = 'correct'
-    reviewForm.nt = 'correct'
-    reviewForm.gc = 'correct'
-    reviewForm.finalDecision = shouldTransfer === '是' || shouldTransfer === '转人工' ? 'transfer' : 'no_transfer'
-    reviewForm.note = buildJudgeNoteTemplate()
+
+    // 如果有审核记录，使用最后一次审核的数据
+    if (manualReviews && manualReviews.length > 0) {
+      const lastReview = manualReviews[0] // 已按创建时间倒序
+      reviewForm.kmer = lastReview.kmer_review
+      reviewForm.nt = lastReview.nt_review
+      reviewForm.gc = lastReview.gc_review
+      reviewForm.finalDecision = (lastReview.final_decision === 'transfer' || lastReview.final_decision === 'rerun' || lastReview.final_decision === 'manual_transfer') ? 'transfer' : 'no_transfer'
+      reviewForm.note = lastReview.note || buildJudgeNoteTemplate()
+    } else {
+      reviewForm.kmer = 'correct'
+      reviewForm.nt = 'correct'
+      reviewForm.gc = 'correct'
+      reviewForm.finalDecision = shouldTransfer === '是' || shouldTransfer === '转人工' ? 'transfer' : 'no_transfer'
+      reviewForm.note = buildJudgeNoteTemplate()
+    }
   },
   { immediate: true },
 )
@@ -355,6 +378,15 @@ watch(
             </template>
           </el-table-column>
           </el-table>
+          <el-pagination
+            class="pagination"
+            background
+            layout="prev, pager, next"
+            :page-size="store.filters.limit"
+            :total="store.total"
+            :current-page="currentPage"
+            @current-change="onPageChange"
+          />
         </div>
         <div v-show="leftPaneMode === 'report'" class="report-board">
             <div class="report-board__title">
@@ -632,6 +664,11 @@ watch(
 .filters-status__dot--active {
   background: #409eff;
   box-shadow: 0 0 0 4px rgba(64, 158, 255, 0.16);
+}
+
+.pagination {
+  margin-top: 12px;
+  justify-content: flex-end;
 }
 
 .auto-result {
