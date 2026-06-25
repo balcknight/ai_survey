@@ -2,17 +2,14 @@
 import { computed, onMounted } from 'vue'
 import { useCasesStore } from '../../stores/cases'
 import type { CaseSummary } from '../../types/case'
-import { getFinalLevelTagType, getStatusTagType } from '../../constants/case-tags'
+import { getFinalLevelTagType } from '../../constants/case-tags'
 
 const store = useCasesStore()
 
-const statusOptions = [
+const reviewDecisionOptions = [
   { label: '全部', value: '' },
-  { label: 'created', value: 'created' },
-  { label: 'kmer_done', value: 'kmer_done' },
-  { label: 'nt_done', value: 'nt_done' },
-  { label: 'judged', value: 'judged' },
-  { label: 'failed', value: 'failed' },
+  { label: '流转', value: 'transfer' },
+  { label: '不流转', value: 'no_transfer' },
 ]
 
 const finalLevelOptions = [
@@ -24,12 +21,25 @@ const finalLevelOptions = [
   { label: 'fail', value: 'fail' },
 ]
 
-const shouldTransferOptions = [
+const reviewStatusOptions = [
   { label: '全部', value: '' },
-  { label: '是', value: '是' },
-  { label: '否', value: '否' },
-  { label: '转人工', value: '转人工' },
+  { label: '未审核', value: 'unreviewed' },
+  { label: '已审核', value: 'reviewed' },
 ]
+
+function decisionText(value: string | null | undefined): string {
+  if (!value) return '-'
+  if (value === 'transfer' || value === 'rerun' || value === 'manual_transfer') return '流转'
+  if (value === 'no_transfer' || value === 'confirm') return '不流转'
+  return value
+}
+
+function formatDatetime(iso: string | null | undefined): string {
+  if (!iso) return '-'
+  const d = new Date(iso)
+  const pad = (n: number) => String(n).padStart(2, '0')
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`
+}
 
 const currentPage = computed({
   get: () => Math.floor(store.filters.offset / store.filters.limit) + 1,
@@ -81,11 +91,11 @@ onMounted(async () => {
       <el-select v-model="store.filters.final_level" placeholder="final_level">
         <el-option v-for="item in finalLevelOptions" :key="item.value" :label="item.label" :value="item.value" />
       </el-select>
-      <el-select v-model="store.filters.should_transfer" placeholder="should_transfer">
-        <el-option v-for="item in shouldTransferOptions" :key="item.value" :label="item.label" :value="item.value" />
+      <el-select v-model="store.filters.review_status" placeholder="审核状态">
+        <el-option v-for="item in reviewStatusOptions" :key="item.value" :label="item.label" :value="item.value" />
       </el-select>
-      <el-select v-model="store.filters.status" placeholder="status">
-        <el-option v-for="item in statusOptions" :key="item.value" :label="item.label" :value="item.value" />
+      <el-select v-model="store.filters.review_final_decision" placeholder="审核结论">
+        <el-option v-for="item in reviewDecisionOptions" :key="item.value" :label="item.label" :value="item.value" />
       </el-select>
     </div>
 
@@ -114,15 +124,19 @@ onMounted(async () => {
           </el-tag>
         </template>
       </el-table-column>
-      <el-table-column prop="should_transfer" label="transfer" width="90" />
-      <el-table-column prop="status" label="status" width="120">
+      <el-table-column label="最终决策" width="120">
         <template #default="{ row }">
-          <el-tag size="small" :type="getStatusTagType(row.status)">
-            {{ row.status }}
+          <el-tag v-if="row.reviewed" size="small" :type="row.review_final_decision === 'no_transfer' || row.review_final_decision === 'confirm' ? 'danger' : 'success'">
+            {{ decisionText(row.review_final_decision) }}
           </el-tag>
+          <span v-else style="color: #909399; font-size: 12px;">未审核</span>
         </template>
       </el-table-column>
-      <el-table-column prop="updated_at" label="updated_at" min-width="170" show-overflow-tooltip />
+      <el-table-column prop="updated_at" label="更新时间" min-width="150">
+        <template #default="{ row }">
+          {{ formatDatetime(row.updated_at) }}
+        </template>
+      </el-table-column>
     </el-table>
 
     <el-pagination

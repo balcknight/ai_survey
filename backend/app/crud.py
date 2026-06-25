@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from sqlalchemy import Select, func, select
+from sqlalchemy import Select, exists, func, select
 from sqlalchemy.orm import Session, joinedload
 
 from . import models, schemas
@@ -316,6 +316,49 @@ def delete_case(db: Session, case_id: int) -> bool:
     return True
 
 
+def _apply_case_filters(
+    stmt,
+    *,
+    target_species: str | None = None,
+    final_level: str | None = None,
+    should_transfer: str | None = None,
+    status: str | None = None,
+    stage_code: str | None = None,
+    bioinfo_email: str | None = None,
+    review_status: str | None = None,
+    review_final_decision: str | None = None,
+):
+    if target_species:
+        stmt = stmt.where(models.SurveyCase.target_species.contains(target_species))
+    if final_level:
+        stmt = stmt.where(models.SurveyCase.final_level == final_level)
+    if should_transfer:
+        stmt = stmt.where(models.SurveyCase.should_transfer == should_transfer)
+    if status:
+        stmt = stmt.where(models.SurveyCase.status == status)
+    if stage_code:
+        stmt = stmt.where(models.SurveyCase.stage_code == stage_code)
+    if bioinfo_email:
+        stmt = stmt.where(models.SurveyCase.bioinfo_emails_json.contains(bioinfo_email))
+    if review_status == "reviewed":
+        stmt = stmt.where(models.SurveyCase.manual_reviews.any())
+    elif review_status == "unreviewed":
+        stmt = stmt.where(~models.SurveyCase.manual_reviews.any())
+    if review_final_decision:
+        latest_review_id = (
+            select(func.max(models.ManualReview.id))
+            .where(models.ManualReview.case_id == models.SurveyCase.id)
+            .correlate(models.SurveyCase)
+            .scalar_subquery()
+        )
+        stmt = stmt.where(
+            exists()
+            .where(models.ManualReview.id == latest_review_id)
+            .where(models.ManualReview.final_decision == review_final_decision)
+        )
+    return stmt
+
+
 def list_cases(
     db: Session,
     limit: int = 20,
@@ -327,6 +370,7 @@ def list_cases(
     stage_code: str | None = None,
     bioinfo_email: str | None = None,
     review_status: str | None = None,
+    review_final_decision: str | None = None,
 ) -> list[models.SurveyCase]:
     stmt: Select[tuple[models.SurveyCase]] = (
         select(models.SurveyCase)
@@ -340,22 +384,17 @@ def list_cases(
         .limit(limit)
         .offset(offset)
     )
-    if target_species:
-        stmt = stmt.where(models.SurveyCase.target_species.contains(target_species))
-    if final_level:
-        stmt = stmt.where(models.SurveyCase.final_level == final_level)
-    if should_transfer:
-        stmt = stmt.where(models.SurveyCase.should_transfer == should_transfer)
-    if status:
-        stmt = stmt.where(models.SurveyCase.status == status)
-    if stage_code:
-        stmt = stmt.where(models.SurveyCase.stage_code == stage_code)
-    if bioinfo_email:
-        stmt = stmt.where(models.SurveyCase.bioinfo_emails_json.contains(bioinfo_email))
-    if review_status == "reviewed":
-        stmt = stmt.where(models.SurveyCase.manual_reviews.any())
-    elif review_status == "unreviewed":
-        stmt = stmt.where(~models.SurveyCase.manual_reviews.any())
+    stmt = _apply_case_filters(
+        stmt,
+        target_species=target_species,
+        final_level=final_level,
+        should_transfer=should_transfer,
+        status=status,
+        stage_code=stage_code,
+        bioinfo_email=bioinfo_email,
+        review_status=review_status,
+        review_final_decision=review_final_decision,
+    )
     return list(db.execute(stmt).scalars().unique().all())
 
 
@@ -368,24 +407,20 @@ def count_cases(
     stage_code: str | None = None,
     bioinfo_email: str | None = None,
     review_status: str | None = None,
+    review_final_decision: str | None = None,
 ) -> int:
     stmt = select(func.count(models.SurveyCase.id))
-    if target_species:
-        stmt = stmt.where(models.SurveyCase.target_species.contains(target_species))
-    if final_level:
-        stmt = stmt.where(models.SurveyCase.final_level == final_level)
-    if should_transfer:
-        stmt = stmt.where(models.SurveyCase.should_transfer == should_transfer)
-    if status:
-        stmt = stmt.where(models.SurveyCase.status == status)
-    if stage_code:
-        stmt = stmt.where(models.SurveyCase.stage_code == stage_code)
-    if bioinfo_email:
-        stmt = stmt.where(models.SurveyCase.bioinfo_emails_json.contains(bioinfo_email))
-    if review_status == "reviewed":
-        stmt = stmt.where(models.SurveyCase.manual_reviews.any())
-    elif review_status == "unreviewed":
-        stmt = stmt.where(~models.SurveyCase.manual_reviews.any())
+    stmt = _apply_case_filters(
+        stmt,
+        target_species=target_species,
+        final_level=final_level,
+        should_transfer=should_transfer,
+        status=status,
+        stage_code=stage_code,
+        bioinfo_email=bioinfo_email,
+        review_status=review_status,
+        review_final_decision=review_final_decision,
+    )
     return db.execute(stmt).scalar_one()
 
 

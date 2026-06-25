@@ -343,6 +343,7 @@ def list_cases(
     stage_code: str | None = None,
     bioinfo_email: str | None = None,
     review_status: str | None = Query(None, pattern="^(reviewed|unreviewed)$"),
+    review_final_decision: str | None = Query(None, pattern="^(transfer|no_transfer|confirm|rerun|manual_transfer)$"),
 ):
     items = crud.list_cases(
         db=db,
@@ -355,6 +356,7 @@ def list_cases(
         stage_code=stage_code,
         bioinfo_email=bioinfo_email,
         review_status=review_status,
+        review_final_decision=review_final_decision,
     )
     total = crud.count_cases(
         db=db,
@@ -365,6 +367,7 @@ def list_cases(
         stage_code=stage_code,
         bioinfo_email=bioinfo_email,
         review_status=review_status,
+        review_final_decision=review_final_decision,
     )
     return schemas.CaseListOut(
         items=[crud.to_case_summary_out(i) for i in items],

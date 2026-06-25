@@ -41,6 +41,7 @@ export const useCasesStore = defineStore('cases', () => {
     stage_code: '',
     bioinfo_email: '',
     review_status: '' as '' | 'reviewed' | 'unreviewed',
+    review_final_decision: '' as '' | 'transfer' | 'no_transfer',
     limit: 20,
     offset: 0,
   })
@@ -62,6 +63,7 @@ export const useCasesStore = defineStore('cases', () => {
         stage_code: filters.value.stage_code || undefined,
         bioinfo_email: filters.value.bioinfo_email || undefined,
         review_status: filters.value.review_status || undefined,
+        review_final_decision: filters.value.review_final_decision || undefined,
       })
       list.value = Array.isArray(data.items) ? data.items : []
       total.value = Number.isFinite(data.total) ? data.total : list.value.length
@@ -193,6 +195,7 @@ export const useCasesStore = defineStore('cases', () => {
       stage_code: '',
       bioinfo_email: '',
       review_status: '',
+      review_final_decision: '',
       limit: 20,
       offset: 0,
     }

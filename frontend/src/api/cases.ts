@@ -20,6 +20,7 @@ export interface ListQuery {
   stage_code?: string
   bioinfo_email?: string
   review_status?: 'reviewed' | 'unreviewed'
+  review_final_decision?: 'transfer' | 'no_transfer' | 'confirm' | 'rerun' | 'manual_transfer'
 }
 
 export async function getCases(params: ListQuery): Promise<CaseListResponse> {
