@@ -362,9 +362,9 @@ def build_final_survey(kmer_result: dict, nt_result: dict, gc_result: dict[str, 
             final['should_transfer'] = '是'
             final['remark'] = 'kmer与NT判定不一致，但GC判定正常，允许流转'
             return final
-        final['final_level'] = '重度污染'
-        final['should_transfer'] = '否'
-        final['remark'] = 'kmer与NT判定不一致，GC判定重度污染，不流转'
+        final['final_level'] = '待人工复核'
+        final['should_transfer'] = '转人工'
+        final['remark'] = 'kmer与NT判定不一致，GC判定重度污染，转人工复核'
         return final
 
     if kmer_normal:
