@@ -17,11 +17,11 @@ npm run preview
 ```
 
 ## 环境变量
-默认后端地址：`http://192.168.20.24:8001`
+默认后端地址：`http://10.11.0.6:8001`
 
 如需覆盖，可创建 `.env.local`：
 ```bash
-VITE_API_BASE_URL=http://192.168.20.24:8001
+VITE_API_BASE_URL=http://10.11.0.6:8001
 VITE_ENABLE_HTTP_LOG=true
 ```
 

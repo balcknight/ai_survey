@@ -5,7 +5,7 @@ const isDev = import.meta.env.DEV
 const enableHttpLog = isDev && import.meta.env.VITE_ENABLE_HTTP_LOG !== 'false'
 
 const http = axios.create({
-  baseURL: import.meta.env.VITE_API_BASE_URL ?? 'http://192.168.20.24:8001',
+  baseURL: import.meta.env.VITE_API_BASE_URL ?? 'http://10.11.0.6:8001',
   timeout: 60000,
 })
 

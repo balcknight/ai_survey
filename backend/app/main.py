@@ -20,9 +20,9 @@ app.add_middleware(
     # 本地开发常见来源：
     # - http://localhost:5173
     # - http://127.0.0.1:5173
-    # - http://192.168.x.x:5173
+    # - http://10.11.x.x:5173
     # 允许任意端口，便于切换开发服务器端口。
-    allow_origin_regex=r"^https?://(localhost|127\.0\.0\.1|192\.168\.\d{1,3}\.\d{1,3})(:\d+)?$",
+    allow_origin_regex=r"^https?://(localhost|127\.0\.0\.1|10\.11\.\d{1,3}\.\d{1,3})(:\d+)?$",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

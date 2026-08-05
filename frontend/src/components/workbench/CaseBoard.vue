@@ -69,7 +69,7 @@ const gcPlotEmptyText = computed(() => {
   return '暂无 GC 图'
 })
 
-const apiBase = import.meta.env.VITE_API_BASE_URL ?? 'http://192.168.20.24:8001'
+const apiBase = import.meta.env.VITE_API_BASE_URL ?? 'http://10.11.0.6:8001'
 
 const spePlotUrl = computed(() => {
   const caseId = store.selectedCase?.id

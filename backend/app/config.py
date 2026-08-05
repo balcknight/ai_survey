@@ -86,5 +86,5 @@ def get_mail_settings() -> MailSettings:
         from_addr=os.getenv("MAIL_FROM", "1623893955@qq.com").strip(),
         to_addrs=to_addrs,
         subject_prefix=os.getenv("MAIL_SUBJECT_PREFIX", "[Survey提醒]").strip() or "[Survey提醒]",
-        case_list_url=os.getenv("MAIL_CASE_LIST_URL", "http://192.168.20.24:5173/cases").strip(),
+        case_list_url=os.getenv("MAIL_CASE_LIST_URL", "http://10.11.0.6:5173/cases").strip(),
     )

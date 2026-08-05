@@ -129,7 +129,7 @@ SAMPLE_DIR1="data/shenshaoqi_data_v2/1"
 
 #### curl 示例
 ```bash
-curl -X GET "http://192.168.20.24:8001/api/cases/12/judge-report"
+curl -X GET "http://10.11.0.6:8001/api/cases/12/judge-report"
 ```
 
 ### 6) 获取样本 HTML 报告（GET /api/cases/{case_id}/report-html）
@@ -316,7 +316,7 @@ curl -X POST "$BASE_URL/api/cases/rerun-survey" \
 
 #### curl 示例
 ```bash
-BASE_URL="http://192.168.20.24:8001"
+BASE_URL="http://10.11.0.6:8001"
 ZIP_PATH="/data/work/zhurui/survey_rec/data/to_zhurui_surey_jinxianlan/FDSW260016086-2r_CaiXia叶-1/survey_external_test.zip"
 
 curl -X POST "$BASE_URL/api/cases/run-by-archive" \
@@ -492,7 +492,7 @@ export MAIL_SMTP_USE_SSL=true
 export MAIL_SMTP_USERNAME="1623893955@qq.com"
 export MAIL_SMTP_PASSWORD="<QQ邮箱SMTP授权码>"
 export MAIL_SUBJECT_PREFIX="[Survey提醒]"
-export MAIL_CASE_LIST_URL="http://192.168.20.24:5173/cases"
+export MAIL_CASE_LIST_URL="http://10.11.0.6:5173/cases"
 ```
 
 说明：

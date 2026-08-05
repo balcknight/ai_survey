@@ -67,12 +67,12 @@ export async function getJudgeReport(caseId: number): Promise<JudgeReport> {
 }
 
 export function getCaseReportHtmlUrl(caseId: number): string {
-  const base = (import.meta.env.VITE_API_BASE_URL ?? 'http://192.168.20.24:8001').replace(/\/$/, '')
+  const base = (import.meta.env.VITE_API_BASE_URL ?? 'http://10.11.0.6:8001').replace(/\/$/, '')
   return `${base}/api/cases/${caseId}/report-html`
 }
 
 export function getCaseArchiveUrl(caseId: number): string {
-  const base = (import.meta.env.VITE_API_BASE_URL ?? 'http://192.168.20.24:8001').replace(/\/$/, '')
+  const base = (import.meta.env.VITE_API_BASE_URL ?? 'http://10.11.0.6:8001').replace(/\/$/, '')
   return `${base}/api/cases/${caseId}/archive`
 }
 

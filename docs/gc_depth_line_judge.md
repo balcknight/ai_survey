@@ -1,12 +1,12 @@
-## GC-Depth 低深度线性分割判定方案
+## GC-Depth 主脊线 + 右下污染区域判定方案
 
 脚本文件：`gc_depth_line_judge.py`
 
 用途：
 - 输入 `.pos` 原始数据（第3列 GC，第4列 Depth）。
-- 在 `Depth<=10` 区域探索是否存在一条可将高密度（红色）区域大致分开的直线。
-- 若存在，基于全局点云统计直线下/线上的点数与比值 `below/on`。
-- 当 `below/on > 0.25` 判定为“重度污染”。
+- 先在全局点云上估计主云团的 GC-Depth 主脊线。
+- 再在 `Depth<=low_depth_max` 的蓝线以下，自动寻找主峰右侧的低深度污染区域，并拟合其上边界直线。
+- 最终按“污染区域点数 / 总点数”判定是否为重度污染。
 
 ---
 
@@ -16,29 +16,28 @@
 - 读取 `.pos` 第3列（GC）和第4列（Depth）。
 - 保留有效数值点，并限制 `20<=GC<=95`、`Depth>=0`。
 
-2. 低深度区域建模（`Depth<=10`）
-- 仅在低深度区域找分割线。
-- 将点云按网格量化（默认 `GC步长=0.5`，`Depth步长=0.2`），合并重复点并记录权重，提升计算效率与稳健性。
+2. 主脊线估计
+- 按 GC 分箱统计深度分布，优先在 `Depth>low_depth_max` 的主云团中寻找每个 GC bin 的主峰深度。
+- 对各 bin 主峰做插值和平滑，得到 `main_depth(gc)` 主脊线。
 
-3. 候选直线搜索（斜率扫描）
-- 扫描斜率 `m`（默认 `-0.5 ~ 0.5`，共401步）。
-- 对每个 `m`，计算残差：`r = depth - m*gc`。
-- 统计 `r` 的加权直方图并高斯平滑。
-- 若残差分布出现双峰，则峰间谷值对应截距 `b`，得到候选直线：`depth = m*gc + b`。
+3. 右下污染区域定位
+- 只看 `Depth<=low_depth_max` 的点。
+- 在主脊线峰值右侧，统计各 GC bin 的低深度点比例。
+- 自动找到低深度点显著富集的一段 GC 区间，视为候选污染区。
 
-4. “可分开”判定
-- 分离度（`separation`）：峰-谷对比是否明显。
-- 平衡度（`balance`）：直线两侧点数是否都足够。
-- 默认要求：`separation>=0.35` 且 `balance>=0.10`。
-- 在全部候选中取 `score = separation * balance` 最大者作为最终分割线。
+4. 污染区上边界拟合
+- 对候选污染区内的低深度点，按 GC bin 取高分位深度作为“上包络”。
+- 对这些上包络点做加权直线拟合，得到污染区上边界：
+  `depth = slope * gc + intercept`
 
 5. 全局计数与污染判定
-- 在全体点上按直线计算残差 `d = depth - (m*gc+b)`。
-- `line_below_count`: `d < 0`（整条线以下所有点）。
-- `line_on_count`: `d >= 0`（斜线及其以上所有点）。
-- `below_over_on_ratio = line_below_count / max(line_on_count, 1)`。
-- 当 `below_over_on_ratio > heavy_threshold`（默认0.25）判定为重度污染。
-- 同时输出 `diagnostic_*_band_count` 作为窄带诊断信息（基于 `eps`），不参与最终判定。
+- 污染点定义为：
+  `gc >= contam_gc_start` 且 `depth <= low_depth_max` 且 `depth <= slope*gc+intercept`
+- `line_below_count`：污染区域内点数。
+- `line_on_count`：非污染区域点数。
+- `contam_over_total_ratio = line_below_count / total_points`。
+- `below_over_on_ratio = line_below_count / line_on_count` 仅保留作兼容诊断。
+- 当 `contam_over_total_ratio > heavy_threshold`（默认0.07）判定为“重度污染”。
 
 ---
 
@@ -47,14 +46,17 @@
 1. JSON（默认 `outputs/gc_line/<样本名>.gc_line.json`）
 - 输入信息与有效点数
 - 核心参数
-- 拟合结果（是否存在线、`slope/intercept`、分离度、平衡度）
-- 全局统计（线上/线下/线上方计数与比值）
+- 主脊线摘要（`ridge`）
+- 拟合结果（是否存在线、`slope/intercept` 等）
+- 全局统计（污染区点数、污染占总点数比例、诊断带宽计数）
 - 判定结果（`heavy_contamination`）
 
 2. PNG（默认 `outputs/gc_line/<样本名>.gc_line.png`）
 - GC-Depth 二维密度图（高密度偏红）
-- `Depth=10` 参考虚线
-- 检出的分割线与“线上带宽（±eps）”
+- `Depth=low_depth_max` 参考虚线
+- 主脊线
+- 污染区上边界线与带宽（±eps）
+- 污染区 GC 起点
 
 ---
 
@@ -63,11 +65,10 @@
 常用参数：
 - `--low-depth-max`：低深度搜索区上限，默认 `10`。
 - `--line-eps`：`eps`，线附近带宽阈值，默认 `0.4`（仅用于拟合阶段侧边计数与诊断统计，不用于最终分母定义）。
-- `--heavy-threshold`：重度污染阈值，默认 `0.25`。
-- `--slope-min/--slope-max/--slope-steps`：斜率搜索范围和步数。
-- `--min-separation`：双峰分离度下限，默认 `0.35`。
-- `--min-balance`：两侧平衡度下限，默认 `0.10`。
-- `--gc-grid/--depth-grid`：低深度点量化分辨率。
+- `--heavy-threshold`：重度污染阈值，默认 `0.07`，作用于 `contam_over_total_ratio`。
+- `--gc-grid`：GC 分箱步长。
+- `--smooth-sigma`：主脊线平滑强度。
+- 其余历史参数仍保留在 CLI 中做兼容，但当前实现不再依赖旧的双峰分割逻辑。
 
 建议：
 - 若线检出过少：可适当降低 `--min-separation`（如0.30）或 `--min-balance`（如0.08）。
