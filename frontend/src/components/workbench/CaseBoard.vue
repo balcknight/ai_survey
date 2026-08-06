@@ -145,7 +145,7 @@ async function onDelete() {
           <template #header>摘要</template>
           <div class="kv-grid">
             <div><b>ID:</b> {{ formatCellValue(store.selectedCase?.id) }}</div>
-            <div><b>sample_code:</b> {{ formatCellValue(store.selectedCase?.sample_code) }}</div>
+            <div><b>stage_code:</b> {{ formatCellValue(store.selectedCase?.stage_code) }}</div>
             <div><b>target_species:</b> {{ formatCellValue(store.selectedCase?.target_species) }}</div>
             <div><b>status:</b> {{ formatCellValue(store.selectedCase?.status) }}</div>
             <div><b>final_level:</b> {{ formatCellValue(store.selectedCase?.final_level) }}</div>

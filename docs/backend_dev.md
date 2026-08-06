@@ -7,8 +7,9 @@
 
 ## 数据模型
 
+说明：除特别标注外，各表均含自增 `id` 主键与 `created_at` / `updated_at`；子表通过 `case_id` 关联 `survey_cases.id`。
+
 ### 1. survey_cases（主表）
-- `id` 主键
 - `sample_code` 样本编号（可选；未传时默认取 `sample_dir` 最后一级目录名）
 - `target_species` 目标物种
 - `source_path` 来源路径
@@ -16,15 +17,14 @@
 - `bioinfo_emails_json` 生信邮箱列表（JSON，元素结构：`{"name":"...","email":"..."}`）
 - `operation_emails_json` 运营邮箱列表（JSON，元素结构同上）
 - `group_emails_json` 群组邮箱列表（JSON 字符串数组）
+- `contact_name` / `contact_email` / `cc_emails_json` 历史联系人字段（兼容旧数据，新流程以 `bioinfo/operation/group_emails_json` 为准）
 - `archive_path` 原始上传压缩包本地路径
 - `status`（`created|kmer_done|nt_done|judged|failed`）
 - `final_level`（冗余，便于筛选）
-- `should_transfer`（冗余，便于筛选）
+- `should_transfer`（冗余，便于筛选，取值 `是|否|转人工`）
 - `remark`
-- `created_at` / `updated_at`
 
 ### 2. kmer_results（1:1）
-- `case_id`
 - `spe_depths_json` / `spe_freqs_json`
 - `num_depths_json` / `num_freqs_json`
 - `pattern` / `is_normal` / `detail`
@@ -34,36 +34,49 @@
 - `raw_json`
 
 ### 3. nt_results（1:1）
-- `case_id`
-- `nt_score` / `nt_level`
-- `ntcls_score` / `ntspe_score`
+- `nt_level`（NT 判定等级：`正常|重度污染|fail`）
+- `is_heavy_contamination`（是否重度污染）
+- `nt_rule_version`（NT 判定规则版本）
+- `target_species` / `target_category`（目标物种及其分类类别）
+- `source_nt_count` / `valid_nt_count`（原始/有效 NT 条数）
+- `dominant_category` / `dominant_ratio_percent`（占比最高的类别及百分比）
+- `metazoa_ratio_percent` / `plantae_ratio_percent` / `bacteria_ratio_percent` / `fungi_ratio_percent` / `viruses_ratio_percent`（各界占比百分比）
+- `reasonable_contamination_ratio_percent`（合理污染占比百分比）
+- `pollution_ratio_percent` / `pollution_threshold_percent`（污染占比与判定阈值百分比）
 - `ntcls_detail` / `ntspe_detail`
-- `ntcls_top1_pass` / `ntcls_contamination_pass` / `ntspe_contamination_pass`
+- `class_filtered_path` / `class_filtered_paths_json`（按类别过滤后的文件路径）
+- `small_judged_paths_json`（样本量过小、按约定直接判定的文件路径）
+- `nt_results_json`（各输入文件的 NT 判定明细数组）
 - `raw_json`
 
-### 4. survey_results（1:1）
-- `case_id`
-- `final_level` / `should_transfer` / `remark`
+### 4. gc_results（1:1）
+- `executed`（是否执行了 GC 判定）
+- `status`（GC 判定状态）
+- `reason`（未执行/异常原因）
+- `pos_path`（`*.pos` 文件路径）
+- `heavy_contamination`（GC 维度是否判定重度污染）
+- `gc_raw_json` / `raw_json`
+
+### 5. survey_results（1:1）
+- `final_level` / `should_transfer`（`是|否|转人工`） / `remark`
 - `rule_version`
 - `raw_json`
 
-### 5. result_metrics（1:1）
-- `case_id`
+### 6. result_metrics（1:1）
 - `result_path`
 - `ploidy_pattern` / `ploidy_multiplier`
 - `raw_json`（原始 `*.Result.xls` 首行）
 - `adjusted_json`（按倍型修正后的结果）
 - `remark`
 
-### 6. manual_reviews（1:N）
-- `id` 主键
+### 7. manual_reviews（1:N）
 - `case_id` 关联 `survey_cases.id`
+- `reviewer_name`（审核人；接口未开放该入参，后端统一写入 `system`，兼容历史库 NOT NULL 约束）
 - `kmer_review`（`correct|incorrect|uncertain`）
 - `nt_review`（`correct|incorrect|uncertain`）
 - `gc_review`（`correct|incorrect|uncertain`）
 - `final_decision`（存储归一化后的 `transfer|no_transfer`）
 - `note`（审核备注）
-- `created_at` / `updated_at`
 
 ## V1 已实现接口
 - `GET /health`
@@ -405,7 +418,7 @@ curl -X DELETE "$BASE_URL/api/cases/12"
     },
     "nt_result": {
       "nt_level": "fail",
-      "nt_score": 2
+      "is_heavy_contamination": false
     },
     "survey_result": {
       "final_level": "重度污染",
@@ -451,6 +464,12 @@ sqlite3 "$DB" "SELECT c.id,c.sample_code,c.target_species,c.status,kr.pattern AS
 
 # 7) 排查未完成判定（没有 survey_results）
 sqlite3 "$DB" "SELECT c.id,c.sample_code,c.stage_code,c.status,c.updated_at FROM survey_cases c LEFT JOIN survey_results sr ON sr.case_id=c.id WHERE sr.case_id IS NULL ORDER BY c.updated_at DESC;"
+
+# 8) AI 最终结论与人工审核不一致（仅比较 AI 给出明确结论 是/否 的样本，转人工不计入；每个样本取最新一条审核记录）
+sqlite3 "$DB" "WITH latest_review AS (SELECT m.* FROM manual_reviews m JOIN (SELECT case_id, MAX(id) AS max_id FROM manual_reviews GROUP BY case_id) t ON m.id=t.max_id) SELECT c.id,c.sample_code,c.stage_code,sr.final_level,sr.should_transfer,lr.final_decision,lr.note FROM survey_cases c JOIN survey_results sr ON sr.case_id=c.id JOIN latest_review lr ON lr.case_id=c.id WHERE sr.should_transfer IN ('是','否') AND CASE sr.should_transfer WHEN '是' THEN 'transfer' ELSE 'no_transfer' END <> lr.final_decision ORDER BY c.updated_at DESC;"
+
+# 9) kmer/nt 与人工判定不一致（最新审核记录中 kmer_review/nt_review 为 incorrect）
+sqlite3 "$DB" "WITH latest_review AS (SELECT m.* FROM manual_reviews m JOIN (SELECT case_id, MAX(id) AS max_id FROM manual_reviews GROUP BY case_id) t ON m.id=t.max_id) SELECT c.id,c.sample_code,kr.pattern,lr.kmer_review,nr.nt_level,nr.is_heavy_contamination,lr.nt_review,lr.note FROM survey_cases c JOIN latest_review lr ON lr.case_id=c.id LEFT JOIN kmer_results kr ON kr.case_id=c.id LEFT JOIN nt_results nr ON nr.case_id=c.id WHERE lr.kmer_review='incorrect' OR lr.nt_review='incorrect' ORDER BY c.updated_at DESC;"
 ```
 
 ## 目录结构

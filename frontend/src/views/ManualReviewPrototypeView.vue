@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, reactive, ref, watch } from 'vue'
-import { ElMessage, ElMessageBox } from 'element-plus'
+import { useRouter } from 'vue-router'
+import { ElMessage } from 'element-plus'
 import { useCasesStore } from '../stores/cases'
 import type { CaseSummary } from '../types/case'
 import { getCaseArchiveUrl, getCaseReportHtmlUrl } from '../api/cases'
@@ -10,6 +11,7 @@ type ReviewChoice = 'correct' | 'incorrect' | 'uncertain'
 type FinalDecision = 'transfer' | 'no_transfer'
 
 const store = useCasesStore()
+const router = useRouter()
 
 const reviewForm = reactive({
   kmer: 'correct' as ReviewChoice,
@@ -34,7 +36,7 @@ const reviewChoiceOptions = [
 
 const selectedCaseTitle = computed(() => {
   if (!store.selectedCase) return '-'
-  return store.selectedCase.sample_code || `Case #${store.selectedCase.id}`
+  return store.selectedCase.stage_code || `Case #${store.selectedCase.id}`
 })
 
 const leftPaneMode = ref<'list' | 'report' | 'ai'>('list')
@@ -44,11 +46,6 @@ const reportIframeRefs = ref<Record<number, HTMLIFrameElement | null>>({})
 const reportLoadedByCase = reactive<Record<number, boolean>>({})
 const reportLruOrder = ref<number[]>([])
 const REPORT_LRU_LIMIT = 5
-
-const reportHtmlUrl = computed(() => {
-  if (!store.selectedCaseId) return ''
-  return getCaseReportHtmlUrl(store.selectedCaseId)
-})
 
 const reportCacheCaseIds = computed(() => reportLruOrder.value.filter((id) => !!id))
 
@@ -116,7 +113,7 @@ function touchReportCache(caseId: number) {
   reportLruOrder.value = next
 }
 
-function registerReportIframe(caseId: number, el: Element | null) {
+function registerReportIframe(caseId: number, el: unknown) {
   reportIframeRefs.value[caseId] = (el as HTMLIFrameElement | null) ?? null
 }
 
@@ -297,7 +294,10 @@ watch(
 <template>
   <div class="manual-review-page">
     <header class="manual-review-page__header">
-      <h1>人工审核模块</h1>
+      <div class="manual-review-page__header-top">
+        <h1>人工审核模块</h1>
+        <el-button type="primary" plain @click="router.push('/cases')">返回首页</el-button>
+      </div>
       <p>审核 survey 自动判定结果，逐项确认 kmer / nt / gc，并记录备注与最终决策。</p>
     </header>
 
@@ -360,7 +360,6 @@ watch(
           @row-click="onRowClick"
         >
           <el-table-column prop="stage_code" label="分期编号" width="120" />
-          <el-table-column prop="sample_code" label="样本编号" min-width="150" show-overflow-tooltip />
           <el-table-column label="审核生信" min-width="120" show-overflow-tooltip>
             <template #default="{ row }">
               {{ (row.bioinfo_emails?.[0]?.email || '').split('@')[0] || '-' }}
@@ -602,6 +601,13 @@ watch(
   border-radius: 8px;
   background: #fff;
   padding: 12px 16px;
+}
+
+.manual-review-page__header-top {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
 }
 
 .manual-review-page__header h1 {

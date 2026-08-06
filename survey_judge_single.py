@@ -314,7 +314,7 @@ def load_and_adjust_result_metrics(result_path: str, pattern: str) -> dict:
 
 
 def build_final_survey(kmer_result: dict, nt_result: dict, gc_result: dict[str, Any] | None = None) -> dict:
-    """沿用 survey_judge_batch.py 的联合判定逻辑。"""
+    """联合判定：kmer警告/NT fail优先转人工，kmer与NT不一致时由GC复核裁决，其余按常规规则表判定。"""
     kmer_normal = bool(kmer_result.get('is_normal', False))
     nt_level = nt_result.get('nt_level', 'fail')
     conflict_type = None
@@ -324,8 +324,8 @@ def build_final_survey(kmer_result: dict, nt_result: dict, gc_result: dict[str, 
         conflict_type = 'kmer_abnormal_nt_normal'
 
     final = {
-        'final_level': 'fail',
-        'should_transfer': '否',
+        'final_level': '待人工复核',
+        'should_transfer': '转人工',
         'remark': '',
     }
 
@@ -362,33 +362,30 @@ def build_final_survey(kmer_result: dict, nt_result: dict, gc_result: dict[str, 
             final['should_transfer'] = '是'
             final['remark'] = 'kmer与NT判定不一致，但GC判定正常，允许流转'
             return final
+        if conflict_type == 'kmer_abnormal_nt_normal':
+            final['final_level'] = '重度污染'
+            final['should_transfer'] = '否'
+            final['remark'] = 'kmer与NT判定不一致，GC判定重度污染，不流转'
+            return final
         final['final_level'] = '待人工复核'
         final['should_transfer'] = '转人工'
         final['remark'] = 'kmer与NT判定不一致，GC判定重度污染，转人工复核'
         return final
 
-    if kmer_normal:
-        if nt_level == '正常':
-            final['final_level'] = '正常'
-            final['should_transfer'] = '是'
-            final['remark'] = ''
-        elif nt_level == '重度污染':
-            final['final_level'] = '轻度污染'
-            final['should_transfer'] = '否'
-            final['remark'] = 'NT判定重度污染，不建议流转'
-        else:
-            final['final_level'] = '待人工复核'
-            final['should_transfer'] = '转人工'
-            final['remark'] = f'NT判定结果异常({nt_level})，转人工复核'
+    # 常规规则：不一致组合已在上方 GC 仲裁分支裁决、NT fail 已在上方提前返回，
+    # 此处仅剩一致组合（kmer正常+NT正常、kmer异常+NT重度污染）与 NT 异常值防御分支
+    if kmer_normal and nt_level == '正常':
+        final['final_level'] = '正常'
+        final['should_transfer'] = '是'
+        final['remark'] = ''
+    elif (not kmer_normal) and nt_level == '重度污染':
+        final['final_level'] = '重度污染'
+        final['should_transfer'] = '否'
+        final['remark'] = ''
     else:
-        if nt_level == '正常':
-            final['final_level'] = '重度污染'
-            final['should_transfer'] = '否'
-            final['remark'] = 'NT正常但kmer异常，不建议流转'
-        else:
-            final['final_level'] = '待人工复核'
-            final['should_transfer'] = '转人工'
-            final['remark'] = f'NT判定结果异常({nt_level})，转人工复核'
+        final['final_level'] = '待人工复核'
+        final['should_transfer'] = '转人工'
+        final['remark'] = f'NT判定结果异常({nt_level})，转人工复核'
 
     return final
 

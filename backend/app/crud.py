@@ -337,7 +337,7 @@ def _apply_case_filters(
     if status:
         stmt = stmt.where(models.SurveyCase.status == status)
     if stage_code:
-        stmt = stmt.where(models.SurveyCase.stage_code == stage_code)
+        stmt = stmt.where(models.SurveyCase.stage_code.contains(stage_code))
     if bioinfo_email:
         stmt = stmt.where(models.SurveyCase.bioinfo_emails_json.contains(bioinfo_email))
     if review_status == "reviewed":

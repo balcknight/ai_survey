@@ -231,7 +231,7 @@ print(data["analysis_ploidy"]["enabled"], data["warnings"])
 
 4. `kmer` 与 `NT` 判定不一致（`kmer正常+NT重度污染` 或 `kmer异常+NT正常`）时：
    - 触发 GC 判定（自动定位同目录下 `*.pos`）
-   - GC 重度污染阈值：`below/on > 0.07` 记为重度污染，否则记为正常。
+   - GC 重度污染阈值：`contam_over_total_ratio`（= 污染区域点数 `line_below_count` / 总点数）`> 0.07` 记为重度污染，否则记为正常（`below/on` 仅保留作诊断字段，不参与判定）。
    - 若 GC 判定失败，则：
      - `survey_result.should_transfer = 转人工`
      - `survey_result.final_level = 待人工复核`
@@ -240,10 +240,10 @@ print(data["analysis_ploidy"]["enabled"], data["warnings"])
        - `survey_result.should_transfer = 是`
        - `survey_result.final_level = 正常`
        - 备注：`kmer与NT判定不一致，但GC判定正常，允许流转`
-     - GC 判定为重度污染（`heavy_contamination=True`）时不流转：
-       - `survey_result.should_transfer = 否`
-       - `survey_result.final_level = 重度污染`
-       - 备注：`kmer与NT判定不一致，GC判定重度污染，不流转`
+     - GC 判定为重度污染（`heavy_contamination=True`）时转人工：
+       - `survey_result.should_transfer = 转人工`
+       - `survey_result.final_level = 待人工复核`
+       - 备注：`kmer与NT判定不一致，GC判定重度污染，转人工复核`
    - 若冲突为 `kmer异常+NT正常`：
      - GC 判定正常（`heavy_contamination=False`）时转人工：
        - `survey_result.should_transfer = 转人工`
@@ -254,18 +254,17 @@ print(data["analysis_ploidy"]["enabled"], data["warnings"])
        - `survey_result.final_level = 重度污染`
        - 备注：`kmer与NT判定不一致，GC判定重度污染，不流转`
 
-常规规则：
+常规规则（仅适用于 kmer 与 NT 判定一致的两种组合；不一致组合由上文 GC 仲裁分支裁决，NT fail 已在规则 2 处理）：
 
 | kmer是否正常 | NT等级 | 综合判定(final_level) | 是否流转(should_transfer) | 备注 |
 |-------------|--------|-----------------------|----------------------------|------|
 | 是 | 正常 | 正常 | 是 |  |
-| 是 | 重度污染 | 轻度污染 | 否 | NT判定重度污染，不建议流转 |
-| 是 | fail | 待人工复核 | 转人工 | NT判定失败，无法自动识别，转人工复核 |
-| 否 | 正常 | 重度污染 | 否 | NT正常但kmer异常，不建议流转 |
-| 否 | fail | 待人工复核 | 转人工 | NT判定失败，无法自动识别，转人工复核 |
-| 否 | 重度污染 | fail | 否 |  |
+| 否 | 重度污染 | 重度污染 | 否 |  |
 
-说明：当前 NT 正常流程仅产出 `正常/重度污染/fail`。若出现其他异常值，按异常输入转人工复核处理。
+说明：
+- `final_level` 取值仅有 `正常 / 重度污染 / 待人工复核` 三种。原 `fail` 等级已去除，与 `重度污染` 含义合并（kmer异常+NT重度污染 现判为 `重度污染/否`），历史数据已同步迁移。
+- 原「kmer正常+NT重度污染 → 轻度污染」与「kmer异常+NT正常 → 重度污染(备注 NT正常但kmer异常)」两行属于不一致组合，实际始终走 GC 仲裁分支，不可达，已删除；`轻度污染` 等级不再产出。
+- 当前 NT 正常流程仅产出 `正常/重度污染/fail`。若出现其他异常值，按异常输入转人工复核处理。
 
 GC 判定失败的常见原因（转人工合理）：
 - 样本目录内找不到 `*.pos` 文件，或目录本身无效。

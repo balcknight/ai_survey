@@ -186,21 +186,6 @@ export const useCasesStore = defineStore('cases', () => {
     boardDrawerVisible.value = false
   }
 
-  function resetFilters() {
-    filters.value = {
-      target_species: '',
-      final_level: '',
-      should_transfer: '',
-      status: '',
-      stage_code: '',
-      bioinfo_email: '',
-      review_status: '',
-      review_final_decision: '',
-      limit: 20,
-      offset: 0,
-    }
-  }
-
   return {
     list,
     total,
@@ -224,6 +209,5 @@ export const useCasesStore = defineStore('cases', () => {
     rerunSelectedCase,
     removeSelectedCase,
     closeBoardDrawer,
-    resetFilters,
   }
 })

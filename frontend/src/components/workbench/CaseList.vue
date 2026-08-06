@@ -15,10 +15,8 @@ const reviewDecisionOptions = [
 const finalLevelOptions = [
   { label: '全部', value: '' },
   { label: '正常', value: '正常' },
-  { label: '轻度污染', value: '轻度污染' },
   { label: '重度污染', value: '重度污染' },
   { label: '待人工复核', value: '待人工复核' },
-  { label: 'fail', value: 'fail' },
 ]
 
 const reviewStatusOptions = [
@@ -61,11 +59,6 @@ async function onSearch() {
   await loadList()
 }
 
-async function onReset() {
-  store.resetFilters()
-  await loadList()
-}
-
 async function onPageChange(page: number) {
   currentPage.value = page
   await loadList()
@@ -87,21 +80,16 @@ onMounted(async () => {
     </template>
 
     <div class="filters">
-      <el-input v-model="store.filters.target_species" placeholder="target_species" clearable />
-      <el-select v-model="store.filters.final_level" placeholder="final_level">
+      <el-input v-model="store.filters.stage_code" placeholder="stage_code（模糊）" clearable @change="onSearch" />
+      <el-select v-model="store.filters.final_level" placeholder="final_level" @change="onSearch">
         <el-option v-for="item in finalLevelOptions" :key="item.value" :label="item.label" :value="item.value" />
       </el-select>
-      <el-select v-model="store.filters.review_status" placeholder="审核状态">
+      <el-select v-model="store.filters.review_status" placeholder="审核状态" @change="onSearch">
         <el-option v-for="item in reviewStatusOptions" :key="item.value" :label="item.label" :value="item.value" />
       </el-select>
-      <el-select v-model="store.filters.review_final_decision" placeholder="审核结论">
+      <el-select v-model="store.filters.review_final_decision" placeholder="审核结论" @change="onSearch">
         <el-option v-for="item in reviewDecisionOptions" :key="item.value" :label="item.label" :value="item.value" />
       </el-select>
-    </div>
-
-    <div class="filters filters-actions">
-      <el-button type="primary" @click="onSearch">查询</el-button>
-      <el-button @click="onReset">重置</el-button>
     </div>
 
     <el-table
@@ -115,7 +103,7 @@ onMounted(async () => {
       @row-click="onRowClick"
     >
       <el-table-column prop="id" label="ID" width="70" />
-      <el-table-column prop="sample_code" label="sample_code" min-width="160" show-overflow-tooltip />
+      <el-table-column prop="stage_code" label="stage_code" min-width="140" show-overflow-tooltip />
       <el-table-column prop="target_species" label="target_species" min-width="120" show-overflow-tooltip />
       <el-table-column prop="final_level" label="final_level" width="130">
         <template #default="{ row }">
@@ -162,10 +150,6 @@ onMounted(async () => {
   grid-template-columns: repeat(4, minmax(120px, 1fr));
   gap: 8px;
   margin-bottom: 10px;
-}
-
-.filters-actions {
-  grid-template-columns: 100px 100px;
 }
 
 .pagination {
