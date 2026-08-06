@@ -1,5 +1,6 @@
 import axios from 'axios'
 import { ElMessage } from 'element-plus'
+import { clearToken, getToken } from '../utils/auth-token'
 
 const isDev = import.meta.env.DEV
 const enableHttpLog = isDev && import.meta.env.VITE_ENABLE_HTTP_LOG !== 'false'
@@ -10,6 +11,10 @@ const http = axios.create({
 })
 
 http.interceptors.request.use((config) => {
+  const token = getToken()
+  if (token) {
+    config.headers.Authorization = `Bearer ${token}`
+  }
   if (enableHttpLog) {
     console.info('[HTTP][Request]', {
       method: config.method?.toUpperCase(),
@@ -36,6 +41,24 @@ http.interceptors.response.use(
   (error) => {
     const status = error?.response?.status
     const detail = error?.response?.data?.detail
+
+    // 401 专项处理（先于通用错误分支）：
+    // - 登录接口的 401 不跳转，交由下方通用分支提示“用户名或密码错误”。
+    // - 其余接口 401：清 token 并跳转登录页（已在登录页则不再跳转，避免循环）。
+    if (status === 401) {
+      const url: string = error?.config?.url ?? ''
+      const isLoginRequest = url.includes('/api/auth/login')
+      if (!isLoginRequest) {
+        clearToken()
+        if (!window.location.pathname.startsWith('/login')) {
+          ElMessage.error(detail ?? '登录已过期，请重新登录')
+          const redirect = encodeURIComponent(window.location.pathname + window.location.search)
+          window.location.replace(`/login?redirect=${redirect}`)
+        }
+        return Promise.reject(error)
+      }
+      // 登录请求的 401 继续走下方通用分支提示。
+    }
 
     if (!error?.response) {
       if (error?.code === 'ECONNABORTED') {

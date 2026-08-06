@@ -140,6 +140,8 @@ export interface JudgeReport {
 export interface ManualReview {
   id: number
   case_id: number
+  reviewer_id?: number | null
+  reviewer_name?: string | null
   kmer_review: 'correct' | 'incorrect' | 'uncertain'
   nt_review: 'correct' | 'incorrect' | 'uncertain'
   gc_review: 'correct' | 'incorrect' | 'uncertain'

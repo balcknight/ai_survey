@@ -197,7 +197,12 @@ class ManualReview(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     case_id: Mapped[int] = mapped_column(ForeignKey("survey_cases.id"), index=True)
+    # 审核人 user id（可空：历史记录为 NULL）。
+    # 注意：老库通过 ALTER TABLE 补列，SQLite ALTER 不支持附带 FK 约束，
+    # 因此老库中该列为普通可空 INTEGER，业务层不依赖 DB 级 FK。
+    reviewer_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True, index=True)
     # 兼容历史库结构：旧库 reviewer_name 可能是 NOT NULL。
+    # 新语义：提交审核时写入审核人 display_name 快照（保证改名/停用后历史可读）。
     reviewer_name: Mapped[str] = mapped_column(String(128), nullable=False, default="system")
     kmer_review: Mapped[str] = mapped_column(String(16), nullable=False)
     nt_review: Mapped[str] = mapped_column(String(16), nullable=False)
@@ -213,3 +218,38 @@ class ManualReview(Base):
     )
 
     case: Mapped[SurveyCase] = relationship("SurveyCase", back_populates="manual_reviews")
+    reviewer: Mapped[User | None] = relationship("User")
+
+
+class User(Base):
+    __tablename__ = "users"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    username: Mapped[str] = mapped_column(String(64), unique=True, index=True, nullable=False)
+    display_name: Mapped[str] = mapped_column(String(128), nullable=False)
+    password_hash: Mapped[str] = mapped_column(String(255), nullable=False)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime,
+        default=datetime.utcnow,
+        onupdate=datetime.utcnow,
+        nullable=False,
+    )
+
+    sessions: Mapped[list[UserSession]] = relationship(
+        "UserSession", back_populates="user", cascade="all, delete-orphan"
+    )
+
+
+class UserSession(Base):
+    __tablename__ = "user_sessions"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True, nullable=False)
+    # 只存 sha256(token)，库泄露不直接暴露可用会话。
+    token_hash: Mapped[str] = mapped_column(String(64), unique=True, index=True, nullable=False)
+    expires_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+
+    user: Mapped[User] = relationship("User", back_populates="sessions")

@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class SourceItem(BaseModel):
@@ -354,6 +354,8 @@ class ManualReviewIn(BaseModel):
 class ManualReviewOut(BaseModel):
     id: int
     case_id: int
+    reviewer_id: int | None = None
+    reviewer_name: str = "system"
     kmer_review: str
     nt_review: str
     gc_review: str
@@ -361,3 +363,28 @@ class ManualReviewOut(BaseModel):
     note: str | None = None
     created_at: datetime
     updated_at: datetime
+
+
+class LoginIn(BaseModel):
+    username: str = Field(min_length=1, max_length=64)
+    password: str = Field(min_length=1, max_length=128)
+
+
+class UserOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    username: str
+    display_name: str
+    is_active: bool
+
+
+class LoginOut(BaseModel):
+    access_token: str
+    token_type: str = "bearer"
+    expires_at: datetime
+    user: UserOut
+
+
+class LogoutOut(BaseModel):
+    ok: bool = True

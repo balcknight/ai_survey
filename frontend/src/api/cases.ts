@@ -1,4 +1,5 @@
 import http from './http'
+import { appendAuthToken } from '../utils/auth-token'
 import type {
   CaseDetail,
   CaseListResponse,
@@ -72,12 +73,14 @@ export async function getJudgeReport(caseId: number): Promise<JudgeReport> {
 
 export function getCaseReportHtmlUrl(caseId: number): string {
   const base = (import.meta.env.VITE_API_BASE_URL ?? 'http://10.11.0.6:8001').replace(/\/$/, '')
-  return `${base}/api/cases/${caseId}/report-html`
+  // <iframe> 无法携带 Authorization 头，改用 ?token= 查询参数鉴权。
+  return appendAuthToken(`${base}/api/cases/${caseId}/report-html`)
 }
 
 export function getCaseArchiveUrl(caseId: number): string {
   const base = (import.meta.env.VITE_API_BASE_URL ?? 'http://10.11.0.6:8001').replace(/\/$/, '')
-  return `${base}/api/cases/${caseId}/archive`
+  // <a> 下载无法携带 Authorization 头，改用 ?token= 查询参数鉴权。
+  return appendAuthToken(`${base}/api/cases/${caseId}/archive`)
 }
 
 export async function getManualReviews(caseId: number): Promise<ManualReview[]> {

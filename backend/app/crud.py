@@ -495,7 +495,13 @@ def to_case_summary_out(obj: models.SurveyCase) -> schemas.CaseSummaryOut:
     )
 
 
-def create_manual_review(db: Session, case_id: int, payload: schemas.ManualReviewIn) -> models.ManualReview:
+def create_manual_review(
+    db: Session,
+    case_id: int,
+    payload: schemas.ManualReviewIn,
+    *,
+    reviewer: models.User | None = None,
+) -> models.ManualReview:
     # 兼容历史枚举：confirm/rerun/manual_transfer；新前端统一为 transfer/no_transfer。
     decision = payload.final_decision
     if decision in ("confirm", "no_transfer"):
@@ -505,9 +511,17 @@ def create_manual_review(db: Session, case_id: int, payload: schemas.ManualRevie
     else:
         normalized_decision = decision
 
+    # 审核人只能由后端从登录态注入，不接受客户端入参，防止伪造他人身份。
+    reviewer_id = reviewer.id if reviewer is not None else None
+    if reviewer is not None:
+        reviewer_name = reviewer.display_name.strip() or reviewer.username
+    else:
+        reviewer_name = "system"
+
     obj = models.ManualReview(
         case_id=case_id,
-        reviewer_name="system",
+        reviewer_id=reviewer_id,
+        reviewer_name=reviewer_name,
         kmer_review=payload.kmer_review,
         nt_review=payload.nt_review,
         gc_review=payload.gc_review,

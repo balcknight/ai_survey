@@ -3,6 +3,7 @@ import { computed, ref, watch } from 'vue'
 import { ElMessageBox } from 'element-plus'
 import { useCasesStore } from '../../stores/cases'
 import { formatCellValue, formatLongText } from '../../utils/format'
+import { getToken } from '../../utils/auth-token'
 
 const store = useCasesStore()
 
@@ -59,6 +60,9 @@ const gcPlotUrl = computed(() => {
   const qs = new URLSearchParams({
     t: String(updatedAt ?? ''),
   })
+  // <img> 无法携带 Authorization 头，改用 ?token= 查询参数鉴权。
+  const token = getToken()
+  if (token) qs.set('token', token)
   return `${apiBase}/api/cases/${caseId}/gc-plot?${qs.toString()}`
 })
 
@@ -80,6 +84,8 @@ const spePlotUrl = computed(() => {
     spectrum: 'spe',
     t: String(updatedAt ?? ''),
   })
+  const token = getToken()
+  if (token) qs.set('token', token)
   return `${apiBase}/api/cases/${caseId}/kmer-plot?${qs.toString()}`
 })
 
@@ -92,6 +98,8 @@ const numPlotUrl = computed(() => {
     spectrum: 'num',
     t: String(updatedAt ?? ''),
   })
+  const token = getToken()
+  if (token) qs.set('token', token)
   return `${apiBase}/api/cases/${caseId}/kmer-plot?${qs.toString()}`
 })
 

@@ -99,8 +99,14 @@ export default defineConfig({
 
 ### 4.1 路由
 - `/` -> 重定向到 `/cases`
+- `/login` -> 登录页（`meta.public`，唯一无需登录的路由）
 - `/cases` -> Survey 工作台（统计概览 + 列表 + 详情抽屉）
 - `/review-prototype` -> 人工审核页
+
+全局登录守卫（`router.beforeEach`）：
+- `meta.public` 路由（登录页）直接放行。
+- 无 token -> 重定向 `/login?redirect=<原路径>`。
+- 有 token 但内存无用户信息（如刷新页面）-> 先调 `GET /api/auth/me` 校验；失败则回登录页。
 
 ### 4.2 工作台布局
 1. 顶部说明区（标题 + 功能说明 + 「进入人工审核」入口）
@@ -112,15 +118,48 @@ export default defineConfig({
 - 筛选项变更即自动触发检索（无独立查询/重置按钮）
 - 点击行以抽屉形式打开详情看板（CaseBoard）
 
+### 4.3 登录与鉴权
+设计原则：登录页是唯一公开入口；登录后所有业务接口自动携带凭证；审核提交自动绑定当前登录用户。
+
+1. token 存储
+- token 存 `localStorage`（key `survey_auth_token`），由 `src/utils/auth-token.ts` 统一存取。
+- 该模块独立无依赖，`api/http.ts` 与各 store 均可安全引用，避免 `http.ts <-> store` 循环依赖。
+
+2. 请求注入
+- `api/http.ts` 请求拦截器：有 token 则注入 `Authorization: Bearer <token>`。
+
+3. 401 处理流程（`api/http.ts` 响应拦截器）
+- 登录接口（`/api/auth/login`）的 401 不跳转，仅由通用分支提示「用户名或密码错误」。
+- 其余接口的 401：清除 token；若当前不在 `/login`，则提示并 `window.location.replace('/login?redirect=<当前路径>')`。
+  - 用 `replace` 防止浏览器后退回原页造成循环；已在 `/login` 时不再跳转。
+- 防开放重定向：登录成功后的 `redirect` 仅接受单 `/` 开头的站内路径（拒绝 `//` 开头），否则回 `/cases`。
+
+4. 资源 URL 携带 token（关键兼容点）
+- 峰图/GC 图（`<img>`）、HTML 报告（`<iframe>`）、压缩包下载（`<a>`）为浏览器原生加载，无法携带 `Authorization` 头。
+- 因此这些 URL 通过 `appendAuthToken()` 追加 `?token=` 查询参数（后端支持 Header 优先、query 兜底）。
+- 约定：不要把带 token 的 URL 打进日志或粘贴外发。
+
+5. 用户信息展示
+- `stores/auth.ts` 维护 `currentUser`（内存态，不持久化）。
+- 工作台与审核页头部通过 `components/common/UserMenu.vue` 展示显示名 + 退出登录。
+- 审核页展示「当前审核人」，提交确认弹窗含审核人，审核历史列表展示 `reviewer_name`。
+
 ## 5. 代码结构（核心）
 - `src/views/SurveyWorkbenchView.vue`：工作台容器
+- `src/views/ManualReviewPrototypeView.vue`：人工审核页
+- `src/views/LoginView.vue`：登录页
 - `src/components/workbench/CaseStatsBar.vue`：统计概览区
 - `src/components/workbench/CaseList.vue`：列表区
 - `src/components/workbench/CaseBoard.vue`：详情看板
+- `src/components/common/UserMenu.vue`：当前用户 + 退出登录
 - `src/stores/cases.ts`：核心状态与业务动作
-- `src/api/http.ts`：axios 实例与统一异常处理
+- `src/stores/auth.ts`：登录态与当前用户
+- `src/api/http.ts`：axios 实例与统一异常处理（含 token 注入与 401 处理）
 - `src/api/cases.ts`：cases 相关 API 封装
+- `src/api/auth.ts`：login / logout / me API 封装
 - `src/types/case.ts`：类型定义
+- `src/types/auth.ts`：AuthUser / LoginResponse 类型
+- `src/utils/auth-token.ts`：token 存取与资源 URL 追加 token
 
 ### 5.1 `SurveyWorkbenchView.vue`（页面编排层）
 - 职责：只做页面布局与组件装配，不承载业务逻辑。
@@ -187,8 +226,10 @@ export default defineConfig({
 
 ### 5.6 `api/http.ts`（HTTP 基础设施层）
 - 职责：封装 axios 实例、超时、开发日志、全局异常提示。
+- 鉴权：请求拦截器注入 `Authorization: Bearer <token>`；响应拦截器处理 401（见 4.3）。
 - 统一错误语义：
   - 网络错误：提示后端不可达
+  - `401`：未登录/登录过期（登录接口外均跳转登录页）
   - `409`：重复路径冲突
   - `404`：记录不存在
   - `500`：服务端异常
@@ -229,21 +270,34 @@ export default defineConfig({
 - `removeSelectedCase()`：删除当前样本
 
 ## 7. 接口映射
+
+鉴权接口：
+- `POST /api/auth/login`（登录，返回 token）
+- `POST /api/auth/logout`（登出）
+- `GET /api/auth/me`（当前登录用户）
+
+业务接口（除登录外均需携带 token）：
 - `GET /api/cases`（列表）
 - `GET /api/cases/stats`（统计概览）
 - `GET /api/cases/{case_id}`（详情）
+- `GET /api/cases/{case_id}/kmer-plot` / `gc-plot`（峰图/GC 图，`<img>` 用 `?token=`）
 - `GET /api/cases/{case_id}/judge-report`（判定报告）
-- `GET /api/cases/{case_id}/report-html`（HTML 报告）
-- `GET /api/cases/{case_id}/archive`（原始压缩包）
-- `GET /api/cases/{case_id}/manual-review`（审核记录）
-- `POST /api/cases/{case_id}/manual-review`（提交审核）
+- `GET /api/cases/{case_id}/report-html`（HTML 报告，`<iframe>` 用 `?token=`）
+- `GET /api/cases/{case_id}/archive`（原始压缩包，`<a>` 用 `?token=`）
+- `GET /api/cases/{case_id}/manual-review`（审核记录，含审核人）
+- `POST /api/cases/{case_id}/manual-review`（提交审核，审核人由登录态自动绑定）
 - `POST /api/cases/rerun-survey`（重跑）
 - `DELETE /api/cases/{case_id}`（删除）
 
 > 说明：`run-kmer / run-nt / run-survey / check-by-path / run-by-path / run-by-archive` 等执行类接口仍由后端提供，但当前前端工作台不再内置按路径执行入口（样本入库主要由外部 `run-by-archive` 上传触发）。
 
 ## 8. 已实现交互规范
+- 未登录访问业务页面自动跳转登录页（带 `redirect` 回跳）
+- 登录失败停留登录页并提示「用户名或密码错误」，无重定向循环
+- 工作台 / 审核页头部展示当前用户显示名与退出登录
+- 审核页展示当前审核人；提交确认弹窗含审核人；审核历史展示 `reviewer_name`
+- 审核提交不接受前端传入审核人（由登录态自动绑定，防伪造）
 - 列表筛选项变更（失焦 / 回车 / 清空 / 下拉变更）自动触发检索，无独立查询/重置按钮
 - 重跑按钮具备 loading 防重入
-- HTTP `409/404/500` 全局错误提示
+- HTTP `401/409/404/500` 全局错误提示
 - 重跑 / 删除均使用二次确认弹窗

@@ -6,12 +6,21 @@ import { useCasesStore } from '../stores/cases'
 import type { CaseSummary } from '../types/case'
 import { getCaseArchiveUrl, getCaseReportHtmlUrl } from '../api/cases'
 import CaseBoard from '../components/workbench/CaseBoard.vue'
+import UserMenu from '../components/common/UserMenu.vue'
+import { useAuthStore } from '../stores/auth'
 
 type ReviewChoice = 'correct' | 'incorrect' | 'uncertain'
 type FinalDecision = 'transfer' | 'no_transfer'
 
 const store = useCasesStore()
 const router = useRouter()
+const authStore = useAuthStore()
+
+const currentReviewerName = computed(() => {
+  const user = authStore.currentUser
+  if (!user) return '-'
+  return user.display_name || user.username
+})
 
 const reviewForm = reactive({
   kmer: 'correct' as ReviewChoice,
@@ -166,6 +175,13 @@ function decisionText(value: string | null | undefined): string {
   return value
 }
 
+function formatDatetime(iso: string | null | undefined): string {
+  if (!iso) return '-'
+  const d = new Date(iso)
+  const pad = (n: number) => String(n).padStart(2, '0')
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`
+}
+
 function buildJudgeNoteTemplate() {
   const report = store.selectedJudgeReport
   const ntAbnormal = yesNoText(report?.nt_abnormal)
@@ -296,7 +312,10 @@ watch(
     <header class="manual-review-page__header">
       <div class="manual-review-page__header-top">
         <h1>人工审核模块</h1>
-        <el-button type="primary" plain @click="router.push('/cases')">返回首页</el-button>
+        <div class="manual-review-page__header-actions">
+          <UserMenu />
+          <el-button type="primary" plain @click="router.push('/cases')">返回首页</el-button>
+        </div>
       </div>
       <p>审核 survey 自动判定结果，逐项确认 kmer / nt / gc，并记录备注与最终决策。</p>
     </header>
@@ -426,6 +445,7 @@ watch(
         <el-empty v-else-if="!store.selectedCase" description="请选择左侧样本后开始审核" />
         <template v-else>
           <div class="auto-result">
+            <div><b>当前审核人:</b> {{ currentReviewerName }}</div>
             <div><b>自动 final_level:</b> {{ store.selectedCase.final_level || '-' }}</div>
             <div><b>自动 should_transfer:</b> {{ store.selectedCase.should_transfer || '-' }}</div>
             <div><b>审核生信（邮箱前缀）:</b> {{ bioinfoNamesText }}</div>
@@ -549,6 +569,24 @@ watch(
               </div>
             </el-form-item>
           </el-form>
+
+          <div class="review-history" v-if="store.selectedManualReviews.length">
+            <div class="review-history__title">审核历史</div>
+            <el-table :data="store.selectedManualReviews" size="small" border>
+              <el-table-column prop="reviewer_name" label="审核人" width="120" show-overflow-tooltip>
+                <template #default="{ row }">{{ row.reviewer_name || 'system' }}</template>
+              </el-table-column>
+              <el-table-column label="最终决策" width="100">
+                <template #default="{ row }">{{ decisionText(row.final_decision) }}</template>
+              </el-table-column>
+              <el-table-column label="提交时间" width="160">
+                <template #default="{ row }">{{ formatDatetime(row.created_at) }}</template>
+              </el-table-column>
+              <el-table-column prop="note" label="备注" min-width="200" show-overflow-tooltip>
+                <template #default="{ row }">{{ row.note || '-' }}</template>
+              </el-table-column>
+            </el-table>
+          </div>
         </template>
       </el-card>
     </section>
@@ -569,6 +607,7 @@ watch(
 
         <div class="submit-confirm__meta">
           <div><span>样本：</span>{{ selectedCaseTitle }}</div>
+          <div><span>审核人：</span>{{ currentReviewerName }}</div>
           <div><span>最终决策：</span>{{ reviewForm.finalDecision === 'transfer' ? '流转' : '不流转' }}</div>
         </div>
 
@@ -606,6 +645,12 @@ watch(
 .manual-review-page__header-top {
   display: flex;
   justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+}
+
+.manual-review-page__header-actions {
+  display: flex;
   align-items: center;
   gap: 12px;
 }
@@ -832,6 +877,17 @@ watch(
   font-size: 12px;
   line-height: 1.6;
   color: #667085;
+}
+
+.review-history {
+  margin-top: 16px;
+}
+
+.review-history__title {
+  font-size: 14px;
+  font-weight: 600;
+  color: #0b2545;
+  margin-bottom: 8px;
 }
 
 .report-board {

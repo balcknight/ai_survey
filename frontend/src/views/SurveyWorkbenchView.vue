@@ -3,6 +3,7 @@ import { useRouter } from 'vue-router'
 import CaseStatsBar from '../components/workbench/CaseStatsBar.vue'
 import CaseList from '../components/workbench/CaseList.vue'
 import CaseBoard from '../components/workbench/CaseBoard.vue'
+import UserMenu from '../components/common/UserMenu.vue'
 import { useCasesStore } from '../stores/cases'
 
 const store = useCasesStore()
@@ -14,7 +15,10 @@ const router = useRouter()
     <header class="workbench-page__header">
       <div class="workbench-page__header-top">
         <h1>Survey 判定工作台</h1>
-        <el-button type="primary" plain @click="router.push('/review-prototype')">进入人工审核</el-button>
+        <div class="workbench-page__header-actions">
+          <UserMenu />
+          <el-button type="primary" plain @click="router.push('/review-prototype')">进入人工审核</el-button>
+        </div>
       </div>
       <p>点击样本以抽屉形式展示判定详情看板，支持按分期号与物种模糊检索。</p>
     </header>
@@ -60,6 +64,12 @@ const router = useRouter()
 .workbench-page__header-top {
   display: flex;
   justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+}
+
+.workbench-page__header-actions {
+  display: flex;
   align-items: center;
   gap: 12px;
 }

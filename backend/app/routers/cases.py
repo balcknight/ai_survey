@@ -12,8 +12,9 @@ from fastapi import APIRouter, BackgroundTasks, Depends, File, Form, HTTPExcepti
 from fastapi.responses import FileResponse, HTMLResponse
 from sqlalchemy.orm import Session
 
-from .. import crud, schemas
+from .. import crud, models, schemas
 from ..db import get_db
+from ..deps import get_current_user
 from ..json_utils import from_json_text
 from ..services.gc_plot import GC_PLOT_ROOT, cleanup_gc_outputs
 from ..services.kmer_plot import KMER_PLOT_ROOT, cleanup_kmer_plots, generate_kmer_plots
@@ -26,7 +27,13 @@ from ..services.survey_runner import (
     run_survey_by_paths,
 )
 
-router = APIRouter(prefix="/api/cases", tags=["cases"])
+# 前端使用的接口：全部需要登录。
+router = APIRouter(prefix="/api/cases", tags=["cases"], dependencies=[Depends(get_current_user)])
+# 外部机器对机器接口（run-*/check-by-path）：保持开放，避免破坏外部集成。
+public_router = APIRouter(prefix="/api/cases", tags=["cases-public"])
+# 资源端点（峰图/GC 图/HTML 报告/压缩包）通过 ?token= 传递凭证，
+# 禁止缓存并避免 token 随 Referer 泄露。
+RESOURCE_RESPONSE_HEADERS = {"Cache-Control": "no-store", "Referrer-Policy": "no-referrer"}
 EXTERNAL_UPLOAD_ROOT = Path("data/external_uploads").resolve()
 logger = logging.getLogger("uvicorn.error")
 
@@ -414,7 +421,7 @@ def get_kmer_plot(
     except ValueError as exc:
         raise HTTPException(status_code=403, detail="峰图路径不在受管目录，拒绝访问") from exc
 
-    return FileResponse(str(path), media_type="image/png", filename=path.name)
+    return FileResponse(str(path), media_type="image/png", filename=path.name, headers=RESOURCE_RESPONSE_HEADERS)
 
 
 @router.get("/{case_id}/gc-plot")
@@ -439,7 +446,7 @@ def get_gc_plot(case_id: int, db: Session = Depends(get_db)):
     except ValueError as exc:
         raise HTTPException(status_code=403, detail="GC图路径不在受管目录，拒绝访问") from exc
 
-    return FileResponse(str(path), media_type="image/png", filename=path.name)
+    return FileResponse(str(path), media_type="image/png", filename=path.name, headers=RESOURCE_RESPONSE_HEADERS)
 
 
 @router.get("/{case_id}/judge-report", response_model=schemas.JudgeReportOut)
@@ -483,7 +490,11 @@ def get_case_report_html(case_id: int, db: Session = Depends(get_db)):
         raise HTTPException(status_code=403, detail="报告文件路径非法，拒绝访问") from exc
 
     html_text = target.read_text(encoding="utf-8", errors="ignore")
-    return HTMLResponse(content=html_text, media_type="text/html; charset=utf-8")
+    return HTMLResponse(
+        content=html_text,
+        media_type="text/html; charset=utf-8",
+        headers=RESOURCE_RESPONSE_HEADERS,
+    )
 
 
 @router.get("/{case_id}/archive")
@@ -498,7 +509,12 @@ def download_case_archive(case_id: int, db: Session = Depends(get_db)):
     if not archive_path.exists() or not archive_path.is_file():
         raise HTTPException(status_code=404, detail="压缩包文件不存在")
 
-    return FileResponse(str(archive_path), media_type="application/zip", filename=archive_path.name)
+    return FileResponse(
+        str(archive_path),
+        media_type="application/zip",
+        filename=archive_path.name,
+        headers=RESOURCE_RESPONSE_HEADERS,
+    )
 
 
 @router.get("/{case_id}/manual-review", response_model=list[schemas.ManualReviewOut])
@@ -511,6 +527,8 @@ def get_manual_reviews(case_id: int, db: Session = Depends(get_db)):
         schemas.ManualReviewOut(
             id=row.id,
             case_id=row.case_id,
+            reviewer_id=row.reviewer_id,
+            reviewer_name=row.reviewer_name,
             kmer_review=row.kmer_review,
             nt_review=row.nt_review,
             gc_review=row.gc_review,
@@ -529,11 +547,12 @@ def create_manual_review(
     payload: schemas.ManualReviewIn,
     background_tasks: BackgroundTasks,
     db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user),
 ):
     obj = crud.get_case_detail(db, case_id)
     if obj is None:
         raise HTTPException(status_code=404, detail="样本不存在")
-    row = crud.create_manual_review(db, case_id, payload)
+    row = crud.create_manual_review(db, case_id, payload, reviewer=current_user)
     detail = crud.to_case_detail_out(obj)
     _enqueue_survey_done_email(
         background_tasks,
@@ -545,6 +564,8 @@ def create_manual_review(
     return schemas.ManualReviewOut(
         id=row.id,
         case_id=row.case_id,
+        reviewer_id=row.reviewer_id,
+        reviewer_name=row.reviewer_name,
         kmer_review=row.kmer_review,
         nt_review=row.nt_review,
         gc_review=row.gc_review,
@@ -555,7 +576,7 @@ def create_manual_review(
     )
 
 
-@router.post("/run-by-path", response_model=schemas.RunByPathOut)
+@public_router.post("/run-by-path", response_model=schemas.RunByPathOut)
 def run_by_path(
     payload: schemas.RunByPathIn,
     background_tasks: BackgroundTasks,
@@ -610,7 +631,7 @@ def run_by_path(
     )
 
 
-@router.post("/run-by-archive", response_model=schemas.ExternalRunByArchiveOut)
+@public_router.post("/run-by-archive", response_model=schemas.ExternalRunByArchiveOut)
 async def run_by_archive(
     background_tasks: BackgroundTasks,
     archive: UploadFile = File(...),
@@ -720,7 +741,7 @@ async def run_by_archive(
     )
 
 
-@router.post("/check-by-path", response_model=schemas.CheckByPathOut)
+@public_router.post("/check-by-path", response_model=schemas.CheckByPathOut)
 def check_by_path(payload: schemas.CheckByPathIn):
     normalized_dir = _normalize_sample_dir(payload.sample_dir)
     file_check = check_required_files(normalized_dir)
@@ -735,7 +756,7 @@ def check_by_path(payload: schemas.CheckByPathIn):
     )
 
 
-@router.post("/run-kmer", response_model=schemas.RunStepByPathOut)
+@public_router.post("/run-kmer", response_model=schemas.RunStepByPathOut)
 def run_kmer(payload: schemas.RunStepByPathIn, db: Session = Depends(get_db)):
     normalized_dir = _normalize_sample_dir(payload.sample_dir)
     resolved_sample_code = _resolve_sample_code(payload.sample_code, normalized_dir)
@@ -779,7 +800,7 @@ def run_kmer(payload: schemas.RunStepByPathIn, db: Session = Depends(get_db)):
     )
 
 
-@router.post("/run-nt", response_model=schemas.RunStepByPathOut)
+@public_router.post("/run-nt", response_model=schemas.RunStepByPathOut)
 def run_nt(payload: schemas.RunStepByPathIn, db: Session = Depends(get_db)):
     normalized_dir = _normalize_sample_dir(payload.sample_dir)
     resolved_sample_code = _resolve_sample_code(payload.sample_code, normalized_dir)
@@ -821,7 +842,7 @@ def run_nt(payload: schemas.RunStepByPathIn, db: Session = Depends(get_db)):
     )
 
 
-@router.post("/run-survey", response_model=schemas.RunStepByPathOut)
+@public_router.post("/run-survey", response_model=schemas.RunStepByPathOut)
 def run_survey(
     payload: schemas.RunStepByPathIn,
     background_tasks: BackgroundTasks,

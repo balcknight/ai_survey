@@ -71,35 +71,82 @@
 
 ### 7. manual_reviews（1:N）
 - `case_id` 关联 `survey_cases.id`
-- `reviewer_name`（审核人；接口未开放该入参，后端统一写入 `system`，兼容历史库 NOT NULL 约束）
+- `reviewer_id`（审核人 user id，可空，关联 `users.id`；历史记录为 NULL）
+  - 新库由 `create_all` 建出带外键的列；老库通过 `ALTER TABLE` 补列，SQLite 的 `ALTER ADD COLUMN` 不支持附带外键约束，故老库中该列为普通可空 INTEGER（业务层不依赖数据库级外键）。
+- `reviewer_name`（审核人显示名快照；提交审核时写入当时用户的 `display_name`，保证改名/停用后历史可读；历史记录为 `system`）
 - `kmer_review`（`correct|incorrect|uncertain`）
 - `nt_review`（`correct|incorrect|uncertain`）
 - `gc_review`（`correct|incorrect|uncertain`）
 - `final_decision`（存储归一化后的 `transfer|no_transfer`）
 - `note`（审核备注）
 
+### 8. users（用户表）
+- `username`（登录名，唯一）
+- `display_name`（显示名，用于审核人展示）
+- `password_hash`（PBKDF2-SHA256 哈希，格式 `pbkdf2_sha256$迭代数$salt_hex$hash_hex`）
+- `is_active`（是否启用；停用后无法登录，且其未过期会话逐请求被拒）
+- `created_at` / `updated_at`
+
+### 9. user_sessions（登录会话表）
+- `user_id` 关联 `users.id`
+- `token_hash`（会话 token 的 sha256，唯一索引；库中不存明文 token）
+- `expires_at`（过期时间，默认登录后 7 天，可配）
+- `created_at`
+
 ## V1 已实现接口
+
+鉴权说明：标注 🔒 的接口需登录后调用（携带 `Authorization: Bearer <token>`）；外部机器对机器接口（`run-*`/`check-by-path`）保持开放。详见「鉴权设计」章。
+
 - `GET /health`
-- `GET /api/cases` 列表查询（`limit/offset/target_species/final_level/should_transfer/status/stage_code/bioinfo_email/review_status`）
-- `GET /api/cases/stats` 样本统计（`total/by_final_level/reviewed/unreviewed`）
-- `GET /api/cases/{case_id}` 样本详情
-- `GET /api/cases/{case_id}/kmer-plot?spectrum=spe|num` 获取 kmer 峰图（PNG）
-- `GET /api/cases/{case_id}/gc-plot` 获取 GC 图（PNG，始终尝试生成并展示）
-- `GET /api/cases/{case_id}/judge-report` 获取判定报告（结构化+文本总结）
-- `GET /api/cases/{case_id}/report-html` 获取样本目录内 html 报告（用于前端看板展示）
-- `GET /api/cases/{case_id}/archive` 下载 run-by-archive 保存的原始压缩包
-- `GET /api/cases/{case_id}/manual-review` 获取人工审核记录（倒序）
-- `POST /api/cases/{case_id}/manual-review` 提交人工审核记录
+- `POST /api/auth/login` 登录，返回 token
+- `POST /api/auth/logout` 登出（幂等）
+- `GET /api/auth/me` 当前登录用户
+- 🔒 `GET /api/cases` 列表查询（`limit/offset/target_species/final_level/should_transfer/status/stage_code/bioinfo_email/review_status`）
+- 🔒 `GET /api/cases/stats` 样本统计（`total/by_final_level/reviewed/unreviewed`）
+- 🔒 `GET /api/cases/{case_id}` 样本详情
+- 🔒 `GET /api/cases/{case_id}/kmer-plot?spectrum=spe|num` 获取 kmer 峰图（PNG）
+- 🔒 `GET /api/cases/{case_id}/gc-plot` 获取 GC 图（PNG，始终尝试生成并展示）
+- 🔒 `GET /api/cases/{case_id}/judge-report` 获取判定报告（结构化+文本总结）
+- 🔒 `GET /api/cases/{case_id}/report-html` 获取样本目录内 html 报告（用于前端看板展示）
+- 🔒 `GET /api/cases/{case_id}/archive` 下载 run-by-archive 保存的原始压缩包
+- 🔒 `GET /api/cases/{case_id}/manual-review` 获取人工审核记录（倒序，含审核人）
+- 🔒 `POST /api/cases/{case_id}/manual-review` 提交人工审核记录（审核人由登录态自动确定）
   - `final_decision` 入参兼容：`transfer|no_transfer|confirm|rerun|manual_transfer`
   - 后端会归一化存储为：`transfer|no_transfer`
-- `DELETE /api/cases/{case_id}` 删除样本（删除后可重新发起同路径判定）
+- 🔒 `DELETE /api/cases/{case_id}` 删除样本（删除后可重新发起同路径判定）
+- 🔒 `POST /api/cases/rerun-survey` 显式确认后重跑并覆盖该路径的已有记录
 - `POST /api/cases/check-by-path` 只检查样本目录文件是否齐全（不执行判定）
 - `POST /api/cases/run-kmer` 输入样本目录，执行 kmer 判定并入库
 - `POST /api/cases/run-nt` 输入样本目录，执行 NT 判定并入库
 - `POST /api/cases/run-survey` 输入样本目录，执行 `survey_judge_single.py` 同款完整判定（kmer+nt+survey+result）并入库
-- `POST /api/cases/rerun-survey` 显式确认后重跑并覆盖该路径的已有记录
 - `POST /api/cases/run-by-path` 输入样本目录，自动检查 5 个必需文件；若齐全则执行完整 survey 判定并入库
 - `POST /api/cases/run-by-archive` 外部上传 `.zip` 压缩包，服务端落盘并解压后执行完整 survey 判定并入库
+
+## 鉴权设计
+
+### 目标与范围
+- 用户规模 3-10 人（内部工具），无注册系统；用户由 `scripts/manage_users.py` 命令行维护。
+- 核心目标：提交人工审核时自动绑定审核人（`manual_reviews.reviewer_id` + `reviewer_name` 快照）。
+- **受保护接口**（前端使用）：列表、统计、详情、峰图/GC 图、判定报告、HTML 报告、压缩包下载、人工审核读写、重跑、删除。
+- **开放接口**（外部机器对机器）：`run-by-path/run-by-archive/run-kmer/run-nt/run-survey/check-by-path`，以及 `/health`、`/api/auth/login`。
+
+### 凭证与存储
+- 密码哈希：stdlib `hashlib.pbkdf2_hmac`（SHA256，60 万迭代，16 字节随机盐），零第三方依赖；存储格式 `pbkdf2_sha256$迭代数$salt_hex$hash_hex`，带方案前缀便于未来升级 bcrypt/argon2。
+- 会话 token：`secrets.token_urlsafe(32)`；`user_sessions` 表只存 `sha256(token)`，支持服务端撤销（登出/停用即失效）。
+- token 有效期默认 7 天（`AUTH_TOKEN_TTL_HOURS` 可配），过期会话惰性清理。
+
+### 凭证传递
+- JSON 接口一律走请求头 `Authorization: Bearer <token>`。
+- `<img>/<iframe>/<a>` 直连的资源端点（kmer-plot/gc-plot/report-html/archive）无法携带请求头，额外支持 `?token=` 查询参数兜底；这些端点响应带 `Cache-Control: no-store` 与 `Referrer-Policy: no-referrer`，降低 token 出现在 URL 后的缓存/Referer 泄露风险。
+
+### 审核人绑定
+- 审核人只能由后端从登录态解析注入，**不接受客户端传入**（`ManualReviewIn` 无审核人字段），防止伪造他人身份。
+- 写入规则：`reviewer_id`=当前用户 id；`reviewer_name`=用户 `display_name` 快照（为空则 `username`）。
+- 历史审核记录 `reviewer_id` 为 NULL、`reviewer_name` 为 `system`。
+
+### 首次启动默认管理员
+- `init_db` 时若 `users` 表为空，自动创建默认管理员：用户名/显示名/密码分别取 `ADMIN_USERNAME`（默认 admin）/`ADMIN_DISPLAY_NAME`（默认 管理员）/`ADMIN_PASSWORD`。
+- `ADMIN_PASSWORD` 留空时随机生成密码并打印到启动日志（请尽快用 `scripts/manage_users.py` 修改）。
 
 ## 通用测试前缀
 ```bash
@@ -157,6 +204,8 @@ curl -X GET "http://10.11.0.6:8001/api/cases/12/judge-report"
 ### 8) 获取人工审核记录（GET /api/cases/{case_id}/manual-review）
 #### 说明
 - 按创建时间倒序返回该样本的人工审核历史。
+- 每条记录含 `reviewer_id`（审核人 user id，历史记录为 null）与 `reviewer_name`（审核人显示名快照，历史记录为 `system`）。
+- 需登录（🔒）。
 
 ### 9) 提交人工审核记录（POST /api/cases/{case_id}/manual-review）
 #### 请求参数
@@ -165,6 +214,9 @@ curl -X GET "http://10.11.0.6:8001/api/cases/12/judge-report"
 - `gc_review`：`correct|incorrect|uncertain`
 - `final_decision`：`transfer|no_transfer|confirm|rerun|manual_transfer`
 - `note`：备注
+#### 说明
+- 需登录（🔒）。审核人由登录态自动确定并写入 `reviewer_id`/`reviewer_name`，**不接受审核人入参**。
+- 入库成功后仍会按 `MAIL_ENABLED` 触发审核备注邮件（行为不变）。
 
 ### 10) 检查文件但不执行（POST /api/cases/check-by-path）
 #### 请求参数
@@ -407,6 +459,60 @@ curl -X GET "$BASE_URL/api/cases/stats"
 }
 ```
 
+### 19) 登录（POST /api/auth/login）
+#### 请求参数
+- `username`：登录名
+- `password`：密码
+#### 说明
+- 用户不存在/已停用/密码错误统一返回 401「用户名或密码错误」（避免用户名枚举）。
+- 成功后创建会话并返回明文 token（仅此一次）。
+
+#### curl 示例
+```bash
+curl -X POST "$BASE_URL/api/auth/login" \
+  -H "Content-Type: application/json" \
+  -d '{"username":"admin","password":"<密码>"}'
+```
+
+#### 响应示例
+```json
+{
+  "access_token": "vN8UDJ481M2vvWZElEc2T1zOgzJraaVGwLZxdjVF-wo",
+  "token_type": "bearer",
+  "expires_at": "2026-08-13T07:26:46",
+  "user": {"id": 1, "username": "admin", "display_name": "管理员", "is_active": true}
+}
+```
+
+### 20) 登出（POST /api/auth/logout）
+#### 说明
+- 幂等：token 已失效时调用也不报错。删除对应会话行，token 立即失效。
+
+#### curl 示例
+```bash
+curl -X POST "$BASE_URL/api/auth/logout" -H "Authorization: Bearer $TOKEN"
+```
+
+### 21) 当前登录用户（GET /api/auth/me）
+#### 说明
+- 需登录（🔒）。返回当前 token 对应的用户信息，供前端校验登录态与展示。
+
+#### curl 示例
+```bash
+curl -X GET "$BASE_URL/api/auth/me" -H "Authorization: Bearer $TOKEN"
+```
+
+#### 受保护接口调用示例（携带 token）
+```bash
+# 登录取 token
+TOKEN=$(curl -s -X POST "$BASE_URL/api/auth/login" -H 'Content-Type: application/json' \
+  -d '{"username":"admin","password":"<密码>"}' | python3 -c 'import sys,json;print(json.load(sys.stdin)["access_token"])')
+# 列表
+curl -X GET "$BASE_URL/api/cases?limit=20" -H "Authorization: Bearer $TOKEN"
+# 资源端点也可用 ?token=（浏览器原生加载场景）
+curl -X GET "$BASE_URL/api/cases/12/kmer-plot?spectrum=spe&token=$TOKEN"
+```
+
 ## 执行类接口返回说明
 （`run-kmer/run-nt/run-survey/run-by-path/rerun-survey/run-by-archive`）
 - `run-kmer` 依赖 `file_check.kmer_complete=true`。
@@ -497,6 +603,12 @@ sqlite3 "$DB" "WITH latest_review AS (SELECT m.* FROM manual_reviews m JOIN (SEL
 
 # 9) kmer/nt 与人工判定不一致（最新审核记录中 kmer_review/nt_review 为 incorrect）
 sqlite3 "$DB" "WITH latest_review AS (SELECT m.* FROM manual_reviews m JOIN (SELECT case_id, MAX(id) AS max_id FROM manual_reviews GROUP BY case_id) t ON m.id=t.max_id) SELECT c.id,c.sample_code,kr.pattern,lr.kmer_review,nr.nt_level,nr.is_heavy_contamination,lr.nt_review,lr.note FROM survey_cases c JOIN latest_review lr ON lr.case_id=c.id LEFT JOIN kmer_results kr ON kr.case_id=c.id LEFT JOIN nt_results nr ON nr.case_id=c.id WHERE lr.kmer_review='incorrect' OR lr.nt_review='incorrect' ORDER BY c.updated_at DESC;"
+
+# 10) 按审核人统计审核量
+sqlite3 "$DB" "SELECT reviewer_name,COUNT(*) AS cnt FROM manual_reviews GROUP BY reviewer_name ORDER BY cnt DESC;"
+
+# 11) 最近审核记录（含审核人用户名与显示名）
+sqlite3 "$DB" "SELECT mr.id,mr.case_id,u.username,u.display_name,mr.reviewer_name,mr.final_decision,mr.created_at FROM manual_reviews mr LEFT JOIN users u ON u.id=mr.reviewer_id ORDER BY mr.id DESC LIMIT 10;"
 ```
 
 ## 目录结构
@@ -509,8 +621,13 @@ backend/
     schemas.py
     crud.py
     json_utils.py
+    security.py        # 密码哈希 / 会话 token 纯工具
+    deps.py            # 鉴权依赖 get_current_user
     routers/
-      cases.py
+      cases.py         # 受保护 router + 外部开放 public_router
+      auth.py          # login / logout / me
+scripts/
+  manage_users.py      # 用户管理 CLI（create/reset-password/set-active/list）
 ```
 
 ## 运行方式
@@ -541,10 +658,42 @@ export MAIL_SUBJECT_PREFIX="[Survey提醒]"
 export MAIL_CASE_LIST_URL="http://10.11.0.6:5173/cases"
 ```
 
+可配置项示例（登录鉴权相关）：
+```bash
+export AUTH_TOKEN_TTL_HOURS=168      # token 有效期（小时），默认 168（7 天）
+export ADMIN_USERNAME=admin          # 首次启动自动创建的默认管理员用户名
+export ADMIN_DISPLAY_NAME=管理员      # 默认管理员显示名
+export ADMIN_PASSWORD=               # 留空则首次启动随机生成并打印到启动日志
+```
+
 说明：
 - `MAIL_ENABLED=false` 时不发送邮件，仅执行判定与入库。
 - `MAIL_ENABLED=true` 时，在 `run-survey`、`rerun-survey`、`run-by-path`、`run-by-archive` 成功后异步发送提醒邮件；`manual-review` 入库成功后会把备注内容作为邮件正文发送（失败不影响主流程）。
 - `MAIL_TO` 当前先固定 `zhurui8901@novogene.com`，后续可改为动态收件策略。
+
+## 用户管理（scripts/manage_users.py）
+
+无注册系统，用户由命令行脚本维护。**必须从项目根目录运行**（数据库路径相对 cwd）。
+
+```bash
+# 列出用户（含活跃会话数）
+conda run -n zhurui_agent python scripts/manage_users.py list
+
+# 创建用户（密码缺省时交互输入，两次确认，长度 >= 10）
+conda run -n zhurui_agent python scripts/manage_users.py create --username zhurui --display-name 朱锐
+
+# 重置密码
+conda run -n zhurui_agent python scripts/manage_users.py reset-password --username zhurui
+
+# 停用/启用（停用时同时注销该用户全部在线会话）
+conda run -n zhurui_agent python scripts/manage_users.py set-active --username zhurui --active false
+conda run -n zhurui_agent python scripts/manage_users.py set-active --username zhurui --active true
+```
+
+说明：
+- 用户名规则：2-64 位，仅允许字母/数字/下划线/点/短横线。
+- 密码可用 `--password` 直接传入（会留在 shell history，仅自动化场景用），缺省走交互式输入。
+- 首次启动后端时若 `users` 表为空会自动创建默认管理员（见「鉴权设计」章）。
 
 启动后端：
 ```bash
