@@ -2,19 +2,16 @@ import { computed, ref } from 'vue'
 import { defineStore } from 'pinia'
 import { ElMessage } from 'element-plus'
 import {
-  checkByPath,
   createManualReview,
   deleteCase,
   getCaseDetail,
   getCases,
+  getCaseStats,
   getJudgeReport,
   getManualReviews,
   rerunSurvey,
-  runKmer,
-  runNt,
-  runSurvey,
 } from '../api/cases'
-import type { CaseDetail, CaseSummary, FileCheckResponse, JudgeReport, ManualReview, RunResponse } from '../types/case'
+import type { CaseDetail, CaseStats, CaseSummary, JudgeReport, ManualReview } from '../types/case'
 
 export type RunType = 'kmer' | 'nt' | 'survey'
 
@@ -22,6 +19,9 @@ export const useCasesStore = defineStore('cases', () => {
   const list = ref<CaseSummary[]>([])
   const total = ref(0)
   const loadingList = ref(false)
+
+  const stats = ref<CaseStats | null>(null)
+  const loadingStats = ref(false)
 
   const selectedCaseId = ref<number | null>(null)
   const selectedCase = ref<CaseDetail | null>(null)
@@ -31,7 +31,6 @@ export const useCasesStore = defineStore('cases', () => {
   const boardDrawerVisible = ref(false)
 
   const runningType = ref<RunType | null>(null)
-  const checkingFiles = ref(false)
 
   const filters = ref({
     target_species: '',
@@ -46,9 +45,18 @@ export const useCasesStore = defineStore('cases', () => {
     offset: 0,
   })
 
-  const fileCheckResult = ref<FileCheckResponse | null>(null)
-
   const hasSelection = computed(() => selectedCaseId.value !== null)
+
+  async function fetchStats() {
+    loadingStats.value = true
+    try {
+      stats.value = await getCaseStats()
+    } catch {
+      stats.value = null
+    } finally {
+      loadingStats.value = false
+    }
+  }
 
   async function fetchList() {
     loadingList.value = true
@@ -70,6 +78,7 @@ export const useCasesStore = defineStore('cases', () => {
     } finally {
       loadingList.value = false
     }
+    await fetchStats()
   }
 
   async function selectCase(caseId: number) {
@@ -100,50 +109,6 @@ export const useCasesStore = defineStore('cases', () => {
     await createManualReview(caseId, payload)
     selectedManualReviews.value = await getManualReviews(caseId)
     await fetchList()
-  }
-
-  async function checkFiles(sampleDir: string) {
-    checkingFiles.value = true
-    try {
-      fileCheckResult.value = await checkByPath(sampleDir)
-      ElMessage.success('文件检查完成')
-    } finally {
-      checkingFiles.value = false
-    }
-  }
-
-  async function runByPath(runType: RunType, sampleDir: string, sampleCode?: string): Promise<RunResponse> {
-    runningType.value = runType
-    try {
-      const payload = {
-        sample_dir: sampleDir,
-        sample_code: sampleCode || null,
-        verbose: false,
-      }
-
-      let result: RunResponse
-      if (runType === 'kmer') {
-        result = await runKmer(payload)
-      } else if (runType === 'nt') {
-        result = await runNt(payload)
-      } else {
-        result = await runSurvey(payload)
-      }
-
-      if (result.executed) {
-        ElMessage.success(result.message)
-        await fetchList()
-        if (result.case_id) {
-          await selectCase(result.case_id)
-        }
-      } else {
-        ElMessage.warning(result.message)
-      }
-
-      return result
-    } finally {
-      runningType.value = null
-    }
   }
 
   async function rerunSelectedCase() {
@@ -190,6 +155,8 @@ export const useCasesStore = defineStore('cases', () => {
     list,
     total,
     loadingList,
+    stats,
+    loadingStats,
     selectedCaseId,
     selectedCase,
     selectedJudgeReport,
@@ -197,15 +164,12 @@ export const useCasesStore = defineStore('cases', () => {
     loadingDetail,
     boardDrawerVisible,
     runningType,
-    checkingFiles,
     filters,
-    fileCheckResult,
     hasSelection,
     fetchList,
+    fetchStats,
     selectCase,
     submitManualReview,
-    checkFiles,
-    runByPath,
     rerunSelectedCase,
     removeSelectedCase,
     closeBoardDrawer,

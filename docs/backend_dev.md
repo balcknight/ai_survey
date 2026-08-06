@@ -81,6 +81,7 @@
 ## V1 已实现接口
 - `GET /health`
 - `GET /api/cases` 列表查询（`limit/offset/target_species/final_level/should_transfer/status/stage_code/bioinfo_email/review_status`）
+- `GET /api/cases/stats` 样本统计（`total/by_final_level/reviewed/unreviewed`）
 - `GET /api/cases/{case_id}` 样本详情
 - `GET /api/cases/{case_id}/kmer-plot?spectrum=spe|num` 获取 kmer 峰图（PNG）
 - `GET /api/cases/{case_id}/gc-plot` 获取 GC 图（PNG，始终尝试生成并展示）
@@ -118,7 +119,7 @@ SAMPLE_DIR1="data/shenshaoqi_data_v2/1"
 - `final_level`：按最终等级精确匹配
 - `should_transfer`：按是否转移精确匹配（如 `是/否`）
 - `status`：按状态精确匹配（`created|kmer_done|nt_done|judged|failed`）
-- `stage_code`：按分期编号精确匹配
+- `stage_code`：按分期编号模糊匹配（`contains`）
 - `bioinfo_email`：按生信邮箱模糊匹配（匹配 `bioinfo_emails_json`）
 - `review_status`：人工审核状态（`reviewed|unreviewed`）
 
@@ -379,6 +380,32 @@ curl -X DELETE "$BASE_URL/api/cases/12"
 
 #### 行为说明
 - 删除样本记录时会同步删除该样本关联的峰图文件（仅清理 `data/kmer_plots/` 受管目录内文件）。
+
+### 18) 样本统计（GET /api/cases/stats）
+#### 说明
+- 返回全库样本的统计概览，供前端工作台统计卡片展示。
+- 统计为全量口径，不随列表筛选条件变化。
+
+#### 返回字段
+- `total`：样本总数
+- `by_final_level`：按 `final_level` 分组的计数（键如 `正常 / 重度污染 / 待人工复核 / 未判定`）
+- `reviewed`：已审核样本数（存在人工审核记录）
+- `unreviewed`：未审核样本数
+
+#### curl 示例
+```bash
+curl -X GET "$BASE_URL/api/cases/stats"
+```
+
+#### 响应示例
+```json
+{
+  "total": 289,
+  "by_final_level": {"正常": 180, "重度污染": 13, "待人工复核": 96},
+  "reviewed": 150,
+  "unreviewed": 139
+}
+```
 
 ## 执行类接口返回说明
 （`run-kmer/run-nt/run-survey/run-by-path/rerun-survey/run-by-archive`）

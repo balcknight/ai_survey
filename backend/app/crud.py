@@ -424,6 +424,30 @@ def count_cases(
     return db.execute(stmt).scalar_one()
 
 
+def get_case_stats(db: Session) -> dict:
+    total = db.execute(select(func.count(models.SurveyCase.id))).scalar_one()
+
+    level_rows = db.execute(
+        select(models.SurveyCase.final_level, func.count(models.SurveyCase.id)).group_by(
+            models.SurveyCase.final_level
+        )
+    ).all()
+    by_final_level: dict[str, int] = {}
+    for level, count in level_rows:
+        by_final_level[level if level else "未判定"] = count
+
+    reviewed = db.execute(
+        select(func.count(models.SurveyCase.id)).where(models.SurveyCase.manual_reviews.any())
+    ).scalar_one()
+
+    return {
+        "total": total,
+        "by_final_level": by_final_level,
+        "reviewed": reviewed,
+        "unreviewed": total - reviewed,
+    }
+
+
 def get_case_detail(db: Session, case_id: int) -> models.SurveyCase | None:
     stmt = (
         select(models.SurveyCase)

@@ -81,6 +81,7 @@ onMounted(async () => {
 
     <div class="filters">
       <el-input v-model="store.filters.stage_code" placeholder="stage_code（模糊）" clearable @change="onSearch" />
+      <el-input v-model="store.filters.target_species" placeholder="物种（模糊）" clearable @change="onSearch" />
       <el-select v-model="store.filters.final_level" placeholder="final_level" @change="onSearch">
         <el-option v-for="item in finalLevelOptions" :key="item.value" :label="item.label" :value="item.value" />
       </el-select>
@@ -95,7 +96,7 @@ onMounted(async () => {
     <el-table
       v-loading="store.loadingList"
       :data="store.list"
-      height="calc(100vh - 450px)"
+      height="calc(100vh - 400px)"
       highlight-current-row
       row-key="id"
       :current-row-key="store.selectedCaseId ?? undefined"
@@ -147,7 +148,7 @@ onMounted(async () => {
 
 .filters {
   display: grid;
-  grid-template-columns: repeat(4, minmax(120px, 1fr));
+  grid-template-columns: repeat(5, minmax(110px, 1fr));
   gap: 8px;
   margin-bottom: 10px;
 }

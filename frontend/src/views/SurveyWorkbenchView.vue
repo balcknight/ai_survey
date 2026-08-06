@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { useRouter } from 'vue-router'
-import RunPanel from '../components/workbench/RunPanel.vue'
+import CaseStatsBar from '../components/workbench/CaseStatsBar.vue'
 import CaseList from '../components/workbench/CaseList.vue'
 import CaseBoard from '../components/workbench/CaseBoard.vue'
 import { useCasesStore } from '../stores/cases'
@@ -16,10 +16,10 @@ const router = useRouter()
         <h1>Survey 判定工作台</h1>
         <el-button type="primary" plain @click="router.push('/review-prototype')">进入人工审核</el-button>
       </div>
-      <p>支持按路径执行 kmer / nt / survey，点击样本后以抽屉形式展示详情看板。</p>
+      <p>点击样本以抽屉形式展示判定详情看板，支持按分期号与物种模糊检索。</p>
     </header>
 
-    <RunPanel />
+    <CaseStatsBar />
 
     <section class="workbench-page__main">
       <div class="workbench-page__list">

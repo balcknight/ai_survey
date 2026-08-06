@@ -377,6 +377,11 @@ def list_cases(
     )
 
 
+@router.get("/stats", response_model=schemas.CaseStatsOut)
+def get_case_stats(db: Session = Depends(get_db)):
+    return crud.get_case_stats(db)
+
+
 @router.get("/{case_id}", response_model=schemas.CaseDetailOut)
 def get_case_detail(case_id: int, db: Session = Depends(get_db)):
     obj = crud.get_case_detail(db, case_id)

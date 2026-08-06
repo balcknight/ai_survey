@@ -1,8 +1,8 @@
 # Survey 前端开发计划与分工文档（Vue3 / V1）
 
 ## 1. 项目目标
-- 构建 Survey 前端工作台，支持按路径触发 `kmer / nt / survey` 判定。
-- 提供左侧样本列表 + 右侧详情看板的高效浏览与操作体验。
+- 构建 Survey 前端工作台，提供样本统计概览、列表浏览、模糊检索与人工审核入口。
+- 提供样本列表 + 详情看板（抽屉形式）的高效浏览与操作体验。
 - V1 重点保证功能完整、稳定联调、可快速迭代，不追求复杂视觉效果。
 
 ## 2. 技术基线
@@ -99,22 +99,22 @@ export default defineConfig({
 
 ### 4.1 路由
 - `/` -> 重定向到 `/cases`
-- `/cases` -> Survey 工作台（单页双栏）
+- `/cases` -> Survey 工作台（统计概览 + 列表 + 详情抽屉）
+- `/review-prototype` -> 人工审核页
 
 ### 4.2 工作台布局
-1. 顶部说明区（标题 + 功能说明）
-2. 路径执行区（RunPanel）
-- 输入：`sample_dir`
-- 可选输入：`sample_code`
-- 按钮：`仅检查文件`、`执行 kmer`、`执行 nt`、`执行 survey`
-- 反馈：展示 `file_check` 关键状态
-3. 主体双栏区
-- 左侧：已判定样本列表（CaseList）
-- 右侧：详情看板（CaseBoard）
+1. 顶部说明区（标题 + 功能说明 + 「进入人工审核」入口）
+2. 统计概览区（CaseStatsBar）
+- 卡片：样本总数 / 正常 / 重度污染 / 待人工复核 / 已审核占比
+- 数据来源：`GET /api/cases/stats`
+3. 样本列表区（CaseList）
+- 筛选：`stage_code`（模糊）、`target_species`（模糊）、`final_level`、审核状态、审核结论
+- 筛选项变更即自动触发检索（无独立查询/重置按钮）
+- 点击行以抽屉形式打开详情看板（CaseBoard）
 
 ## 5. 代码结构（核心）
 - `src/views/SurveyWorkbenchView.vue`：工作台容器
-- `src/components/workbench/RunPanel.vue`：路径执行区
+- `src/components/workbench/CaseStatsBar.vue`：统计概览区
 - `src/components/workbench/CaseList.vue`：列表区
 - `src/components/workbench/CaseBoard.vue`：详情看板
 - `src/stores/cases.ts`：核心状态与业务动作
@@ -125,26 +125,24 @@ export default defineConfig({
 ### 5.1 `SurveyWorkbenchView.vue`（页面编排层）
 - 职责：只做页面布局与组件装配，不承载业务逻辑。
 - 组成：
-  - 顶部说明区（标题、功能引导）
-  - `RunPanel`（触发执行）
+  - 顶部说明区（标题、功能引导、「进入人工审核」入口）
+  - `CaseStatsBar`（统计概览）
   - `CaseList`（列表筛选与选择）
   - `el-drawer + CaseBoard`（详情抽屉）
 - 与 Store 关系：
   - 仅依赖 `boardDrawerVisible` 控制抽屉显隐。
   - 关闭抽屉时调用 `closeBoardDrawer()`，不直接修改业务数据。
 
-### 5.2 `RunPanel.vue`（执行入口层）
-- 职责：收集 `sample_dir / sample_code`，触发后端执行或文件检查。
-- 输入：
-  - `sample_dir`（必填）
-  - `sample_code`（可选）
-- 动作映射：
-  - `仅检查文件` -> `store.checkFiles(sampleDir)`
-  - `执行 kmer/nt/survey` -> `store.runByPath(type, sampleDir, sampleCode)`
+### 5.2 `CaseStatsBar.vue`（统计概览层）
+- 职责：展示全库样本统计概览卡片。
+- 数据来源：`store.stats`（由 `store.fetchStats()` 拉取，随 `fetchList` 自动刷新）。
+- 展示卡片：
+  - 样本总数（`total`）
+  - 正常 / 重度污染 / 待人工复核（`by_final_level`）
+  - 已审核 / 总数（`reviewed / total`）
 - 交互规范：
-  - 空路径先本地拦截，避免无效请求。
-  - 按钮通过 `checkingFiles / runningType` 做防重入。
-  - 展示 `file_check`（`kmer_complete / nt_complete / complete / missing`）供用户快速判断是否可执行。
+  - 加载中用 `loadingStats` 显示 loading。
+  - 数据未就绪时展示占位符 `-`。
 
 ### 5.3 `CaseList.vue`（列表与筛选层）
 - 职责：展示样本摘要列表，提供筛选、分页、行选择。
@@ -153,12 +151,17 @@ export default defineConfig({
   - 加载态：`store.loadingList`
   - 总数：`store.total`
   - 筛选参数：`store.filters`
+- 展示列：
+  - `ID / stage_code / target_species / final_level / 最终决策 / 更新时间`（不再展示 `sample_code`）。
+- 筛选项（变更即自动触发检索，无独立查询/重置按钮）：
+  - `stage_code`（模糊）、`target_species`（模糊）文本框：失焦 / 回车 / 清空时触发。
+  - `final_level`、审核状态、审核结论下拉：变更时触发。
 - 关键行为：
   - 组件挂载时执行 `loadList()` 拉取第一页。
   - 点击行触发 `store.selectCase(row.id)`，并联动打开详情抽屉。
-  - 查询时重置 `offset=0`；重置时恢复默认筛选。
+  - 触发检索时重置 `offset=0`。
 - 视觉语义：
-  - `final_level` 与 `status` 使用 Tag 颜色映射常量统一管理。
+  - `final_level` 使用 Tag 颜色映射常量统一管理。
   - 当前选中行使用高亮类名 `case-list__row--active`。
 
 ### 5.4 `CaseBoard.vue`（详情展示与高风险操作层）
@@ -173,11 +176,11 @@ export default defineConfig({
   - “重跑 survey”“删除”均要求确认弹窗（二次确认）。
 
 ### 5.5 `stores/cases.ts`（业务中枢）
-- 职责：统一管理列表、详情、执行、筛选、抽屉等前端业务状态。
+- 职责：统一管理列表、统计、详情、筛选、抽屉等前端业务状态。
 - 核心动作：
-  - `fetchList`：按筛选参数查询列表
+  - `fetchList`：按筛选参数查询列表，并顺带刷新统计（`fetchStats`）
+  - `fetchStats`：拉取样本统计概览
   - `selectCase`：加载详情并打开抽屉
-  - `runByPath`：执行后刷新列表并自动定位到新样本
   - `rerunSelectedCase / removeSelectedCase`：高风险动作封装
 - 设计原则：
   - 组件尽量“薄”，业务副作用集中在 Store，便于联调和排障。
@@ -204,8 +207,8 @@ export default defineConfig({
 - 重点类型：
   - `CaseSummary`：列表字段集合
   - `CaseDetail`：详情字段集合
-  - `RunResponse`：执行接口返回
-  - `FileCheckResponse`：文件检查返回
+  - `CaseStats`：统计概览返回
+  - `RunResponse`：重跑接口返回
 - 价值：
   - 在开发期尽早暴露字段缺失、类型不匹配和接口变更风险。
 
@@ -213,31 +216,34 @@ export default defineConfig({
 
 ### 6.1 Store 状态
 - 列表态：`list / total / loadingList`
+- 统计态：`stats / loadingStats`
 - 详情态：`selectedCaseId / selectedCase / loadingDetail`
-- 执行态：`runningType / checkingFiles`
-- 筛选态：`filters(limit/offset/target_species/final_level/should_transfer/status)`
-- 文件检查结果：`fileCheckResult`
+- 执行态：`runningType`（仅用于重跑 survey）
+- 筛选态：`filters(limit/offset/stage_code/target_species/final_level/review_status/review_final_decision/...)`
 
 ### 6.2 关键动作
-- `fetchList()`：查询列表
+- `fetchList()`：查询列表（并刷新统计）
+- `fetchStats()`：查询样本统计概览
 - `selectCase(caseId)`：查询详情
-- `checkFiles(sampleDir)`：仅检查路径文件
-- `runByPath(type, sampleDir, sampleCode)`：执行 `kmer / nt / survey`
 - `rerunSelectedCase()`：重跑 survey（confirm=true）
 - `removeSelectedCase()`：删除当前样本
 
 ## 7. 接口映射
-- `GET /api/cases`
-- `GET /api/cases/{case_id}`
-- `POST /api/cases/check-by-path`
-- `POST /api/cases/run-kmer`
-- `POST /api/cases/run-nt`
-- `POST /api/cases/run-survey`
-- `POST /api/cases/rerun-survey`
-- `DELETE /api/cases/{case_id}`
+- `GET /api/cases`（列表）
+- `GET /api/cases/stats`（统计概览）
+- `GET /api/cases/{case_id}`（详情）
+- `GET /api/cases/{case_id}/judge-report`（判定报告）
+- `GET /api/cases/{case_id}/report-html`（HTML 报告）
+- `GET /api/cases/{case_id}/archive`（原始压缩包）
+- `GET /api/cases/{case_id}/manual-review`（审核记录）
+- `POST /api/cases/{case_id}/manual-review`（提交审核）
+- `POST /api/cases/rerun-survey`（重跑）
+- `DELETE /api/cases/{case_id}`（删除）
+
+> 说明：`run-kmer / run-nt / run-survey / check-by-path / run-by-path / run-by-archive` 等执行类接口仍由后端提供，但当前前端工作台不再内置按路径执行入口（样本入库主要由外部 `run-by-archive` 上传触发）。
 
 ## 8. 已实现交互规范
-- 所有执行按钮具备 loading 防重入
-- `executed=false` 按业务提示处理，不当作请求异常
+- 列表筛选项变更（失焦 / 回车 / 清空 / 下拉变更）自动触发检索，无独立查询/重置按钮
+- 重跑按钮具备 loading 防重入
 - HTTP `409/404/500` 全局错误提示
 - 重跑 / 删除均使用二次确认弹窗

@@ -27,6 +27,13 @@ export interface CaseListResponse {
   offset: number
 }
 
+export interface CaseStats {
+  total: number
+  by_final_level: Record<string, number>
+  reviewed: number
+  unreviewed: number
+}
+
 export interface PeaksData {
   depths: number[]
   freqs: number[]
@@ -104,13 +111,6 @@ export interface CaseDetail
   } | null
 }
 
-export interface RunRequest {
-  sample_dir: string
-  sample_code?: string | null
-  case_id?: number | null
-  verbose?: boolean
-}
-
 export interface RunResponse {
   sample_dir: string
   executed: boolean
@@ -135,25 +135,6 @@ export interface JudgeReport {
   ploidy_text: string | null
   transfer_suggestion: string | null
   summary_text: string
-}
-
-export interface FileCheckResponse {
-  sample_dir: string
-  message: string
-  file_check: {
-    spe_path: string | null
-    num_path: string | null
-    ntcls_path: string | null
-    ntcls_source: string | null
-    ntspe_path: string | null
-    ntspe_paths: string[]
-    ntspe_source: string | null
-    result_path: string | null
-    missing: string[]
-    kmer_complete: boolean
-    nt_complete: boolean
-    complete: boolean
-  }
 }
 
 export interface ManualReview {

@@ -214,6 +214,13 @@ class CaseListOut(BaseModel):
     offset: int
 
 
+class CaseStatsOut(BaseModel):
+    total: int
+    by_final_level: dict[str, int] = Field(default_factory=dict)
+    reviewed: int
+    unreviewed: int
+
+
 class CaseDetailOut(BaseModel):
     id: int
     sample_code: str | None = None
