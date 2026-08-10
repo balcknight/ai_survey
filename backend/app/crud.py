@@ -518,6 +518,12 @@ def create_manual_review(
     else:
         reviewer_name = "system"
 
+    # Kmer 判定不正确原因仅在 kmer_review=incorrect 时记录，其余情况置空，保证数据干净。
+    if payload.kmer_review == "incorrect":
+        kmer_incorrect_reason = (payload.kmer_incorrect_reason or "").strip() or None
+    else:
+        kmer_incorrect_reason = None
+
     obj = models.ManualReview(
         case_id=case_id,
         reviewer_id=reviewer_id,
@@ -527,6 +533,7 @@ def create_manual_review(
         gc_review=payload.gc_review,
         final_decision=normalized_decision,
         note=(payload.note or "").strip() or None,
+        kmer_incorrect_reason=kmer_incorrect_reason,
     )
     db.add(obj)
     db.commit()

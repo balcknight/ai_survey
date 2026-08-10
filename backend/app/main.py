@@ -76,6 +76,9 @@ def _ensure_manual_review_columns() -> None:
         existing = {str(r[1]) for r in rows}
         if "reviewer_id" not in existing:
             conn.execute(text("ALTER TABLE manual_reviews ADD COLUMN reviewer_id INTEGER"))
+        # 老库补 kmer_incorrect_reason 列（Kmer 判定不正确原因，仅记录用于算法校对）。
+        if "kmer_incorrect_reason" not in existing:
+            conn.execute(text("ALTER TABLE manual_reviews ADD COLUMN kmer_incorrect_reason TEXT"))
         conn.execute(
             text("CREATE INDEX IF NOT EXISTS ix_manual_reviews_reviewer_id ON manual_reviews(reviewer_id)")
         )

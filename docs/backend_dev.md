@@ -78,7 +78,11 @@
 - `nt_review`（`correct|incorrect|uncertain`）
 - `gc_review`（`correct|incorrect|uncertain`）
 - `final_decision`（存储归一化后的 `transfer|no_transfer`）
-- `note`（审核备注）
+- `note`（审核备注；作为审核邮件正文发送）
+- `kmer_incorrect_reason`（Kmer 判定不正确原因，可空）
+  - 仅当 `kmer_review=incorrect` 时记录人工填写的原因，用于后续校对/改进算法。
+  - **不作为邮件正文发送**（区别于 `note`）；`kmer_review` 非 `incorrect` 时落库为 NULL。
+  - 老库通过 `ALTER TABLE manual_reviews ADD COLUMN kmer_incorrect_reason TEXT` 补列（见「启动迁移」）。
 
 ### 8. users（用户表）
 - `username`（登录名，唯一）
@@ -92,6 +96,14 @@
 - `token_hash`（会话 token 的 sha256，唯一索引；库中不存明文 token）
 - `expires_at`（过期时间，默认登录后 7 天，可配）
 - `created_at`
+
+### 启动迁移（老库兼容）
+服务启动时 `init_db` 幂等执行（`--reload` 下可能多次）：
+- `Base.metadata.create_all` 建出全部表（新库一次到位，含外键/索引）。
+- 对老库做 `ALTER TABLE ... ADD COLUMN` 补列（SQLite 的 `ADD COLUMN` 不支持附带 `FOREIGN KEY`/`UNIQUE` 约束，故老库中这些列为普通可空列，业务层不依赖 DB 级约束）：
+  - `survey_cases`：`stage_code/contact_name/contact_email/cc_emails_json/bioinfo_emails_json/operation_emails_json/group_emails_json/archive_path`
+  - `manual_reviews`：`reviewer_id`（并建索引）、`kmer_incorrect_reason`
+- `users` 表为空时自动创建默认管理员（见「鉴权设计」）。
 
 ## V1 已实现接口
 
@@ -113,6 +125,7 @@
 - 🔒 `POST /api/cases/{case_id}/manual-review` 提交人工审核记录（审核人由登录态自动确定）
   - `final_decision` 入参兼容：`transfer|no_transfer|confirm|rerun|manual_transfer`
   - 后端会归一化存储为：`transfer|no_transfer`
+  - 当 `kmer_review=incorrect` 时 `kmer_incorrect_reason` 必填（强制填写 Kmer 判定不正确原因），否则返回 `400`
 - 🔒 `DELETE /api/cases/{case_id}` 删除样本（删除后可重新发起同路径判定）
 - 🔒 `POST /api/cases/rerun-survey` 显式确认后重跑并覆盖该路径的已有记录
 - `POST /api/cases/check-by-path` 只检查样本目录文件是否齐全（不执行判定）
@@ -213,10 +226,21 @@ curl -X GET "http://10.11.0.6:8001/api/cases/12/judge-report"
 - `nt_review`：`correct|incorrect|uncertain`
 - `gc_review`：`correct|incorrect|uncertain`
 - `final_decision`：`transfer|no_transfer|confirm|rerun|manual_transfer`
-- `note`：备注
+- `note`：审核备注（作为邮件正文发送；即使 AI 判定有误，人工也会把备注改成正确结论，不影响收件人体验）
+- `kmer_incorrect_reason`：Kmer 判定不正确原因（仅当 `kmer_review=incorrect` 时必填；仅记录用于算法校对，不发送邮件）
+
+#### 校验规则
+- **Kmer 判定不正确强制填原因**：当 `kmer_review=incorrect` 时，`kmer_incorrect_reason` 必填且去除首尾空白后非空，否则返回 `400`，不写库、不触发邮件。
+- 落库规则：仅当 `kmer_review=incorrect` 时记录 `kmer_incorrect_reason`（去首尾空白）；其余情况该字段落库为 `NULL`，保证数据干净。
+- 其余字段取值校验沿用 `ManualReviewIn` 的正则约束（见 `schemas.py`）。
+
+#### 设计说明
+- 该原因与审核备注 `note` **解耦**：`note` 会作为邮件正文发送给收件人，而原因只用于内部记录、便于后续校对与改进算法，因此单独存入 `manual_reviews.kmer_incorrect_reason`，不占用 `note`、不进入邮件正文。
+- 因新增列，老库由启动迁移自动 `ALTER TABLE manual_reviews ADD COLUMN kmer_incorrect_reason TEXT`（见「启动迁移」）。
+
 #### 说明
 - 需登录（🔒）。审核人由登录态自动确定并写入 `reviewer_id`/`reviewer_name`，**不接受审核人入参**。
-- 入库成功后仍会按 `MAIL_ENABLED` 触发审核备注邮件（行为不变）。
+- 入库成功后仍会按 `MAIL_ENABLED` 触发审核备注邮件（邮件正文取 `note`，行为不变，不含原因）。
 
 ### 10) 检查文件但不执行（POST /api/cases/check-by-path）
 #### 请求参数
@@ -601,14 +625,17 @@ sqlite3 "$DB" "SELECT c.id,c.sample_code,c.stage_code,c.status,c.updated_at FROM
 # 8) AI 最终结论与人工审核不一致（仅比较 AI 给出明确结论 是/否 的样本，转人工不计入；每个样本取最新一条审核记录）
 sqlite3 "$DB" "WITH latest_review AS (SELECT m.* FROM manual_reviews m JOIN (SELECT case_id, MAX(id) AS max_id FROM manual_reviews GROUP BY case_id) t ON m.id=t.max_id) SELECT c.id,c.sample_code,c.stage_code,sr.final_level,sr.should_transfer,lr.final_decision,lr.note FROM survey_cases c JOIN survey_results sr ON sr.case_id=c.id JOIN latest_review lr ON lr.case_id=c.id WHERE sr.should_transfer IN ('是','否') AND CASE sr.should_transfer WHEN '是' THEN 'transfer' ELSE 'no_transfer' END <> lr.final_decision ORDER BY c.updated_at DESC;"
 
-# 9) kmer/nt 与人工判定不一致（最新审核记录中 kmer_review/nt_review 为 incorrect）
-sqlite3 "$DB" "WITH latest_review AS (SELECT m.* FROM manual_reviews m JOIN (SELECT case_id, MAX(id) AS max_id FROM manual_reviews GROUP BY case_id) t ON m.id=t.max_id) SELECT c.id,c.sample_code,kr.pattern,lr.kmer_review,nr.nt_level,nr.is_heavy_contamination,lr.nt_review,lr.note FROM survey_cases c JOIN latest_review lr ON lr.case_id=c.id LEFT JOIN kmer_results kr ON kr.case_id=c.id LEFT JOIN nt_results nr ON nr.case_id=c.id WHERE lr.kmer_review='incorrect' OR lr.nt_review='incorrect' ORDER BY c.updated_at DESC;"
+# 9) kmer/nt 与人工判定不一致（最新审核记录中 kmer_review/nt_review 为 incorrect，含 Kmer 不正确原因）
+sqlite3 "$DB" "WITH latest_review AS (SELECT m.* FROM manual_reviews m JOIN (SELECT case_id, MAX(id) AS max_id FROM manual_reviews GROUP BY case_id) t ON m.id=t.max_id) SELECT c.id,c.sample_code,kr.pattern,lr.kmer_review,lr.kmer_incorrect_reason,nr.nt_level,nr.is_heavy_contamination,lr.nt_review,lr.note FROM survey_cases c JOIN latest_review lr ON lr.case_id=c.id LEFT JOIN kmer_results kr ON kr.case_id=c.id LEFT JOIN nt_results nr ON nr.case_id=c.id WHERE lr.kmer_review='incorrect' OR lr.nt_review='incorrect' ORDER BY c.updated_at DESC;"
 
 # 10) 按审核人统计审核量
 sqlite3 "$DB" "SELECT reviewer_name,COUNT(*) AS cnt FROM manual_reviews GROUP BY reviewer_name ORDER BY cnt DESC;"
 
 # 11) 最近审核记录（含审核人用户名与显示名）
 sqlite3 "$DB" "SELECT mr.id,mr.case_id,u.username,u.display_name,mr.reviewer_name,mr.final_decision,mr.created_at FROM manual_reviews mr LEFT JOIN users u ON u.id=mr.reviewer_id ORDER BY mr.id DESC LIMIT 10;"
+
+# 12) Kmer 判定不正确原因汇总（用于校对/改进算法；按原因聚合计数）
+sqlite3 "$DB" "SELECT kmer_incorrect_reason,COUNT(*) AS cnt FROM manual_reviews WHERE kmer_incorrect_reason IS NOT NULL AND kmer_incorrect_reason<>'' GROUP BY kmer_incorrect_reason ORDER BY cnt DESC;"
 ```
 
 ## 目录结构

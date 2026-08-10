@@ -349,6 +349,8 @@ class ManualReviewIn(BaseModel):
     gc_review: str = Field(pattern="^(correct|incorrect|uncertain)$")
     final_decision: str = Field(pattern="^(transfer|no_transfer|confirm|rerun|manual_transfer)$")
     note: str | None = None
+    # Kmer 判定不正确原因；kmer_review=incorrect 时必填（见 routers 校验）。
+    kmer_incorrect_reason: str | None = None
 
 
 class ManualReviewOut(BaseModel):
@@ -361,6 +363,7 @@ class ManualReviewOut(BaseModel):
     gc_review: str
     final_decision: str
     note: str | None = None
+    kmer_incorrect_reason: str | None = None
     created_at: datetime
     updated_at: datetime
 

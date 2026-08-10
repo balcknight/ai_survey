@@ -28,6 +28,7 @@ const reviewForm = reactive({
   gc: 'correct' as ReviewChoice,
   finalDecision: 'no_transfer' as FinalDecision,
   note: '',
+  kmerIncorrectReason: '',
 })
 const submitConfirmVisible = ref(false)
 const listRefreshing = ref(false)
@@ -47,6 +48,12 @@ const selectedCaseTitle = computed(() => {
   if (!store.selectedCase) return '-'
   return store.selectedCase.stage_code || `Case #${store.selectedCase.id}`
 })
+
+// Kmer AI 判定被勾选为「不正确」时，必须填写独立的不正确原因后才能提交审核。
+// 该原因仅记录用于后续校对改进算法，不作为邮件正文发送（区别于审核备注 note）。
+const kmerIncorrectReasonMissing = computed(
+  () => reviewForm.kmer === 'incorrect' && !reviewForm.kmerIncorrectReason.trim(),
+)
 
 const leftPaneMode = ref<'list' | 'report' | 'ai'>('list')
 const leftPaneWidth = ref(44)
@@ -152,6 +159,10 @@ async function onSubmitPrototype() {
     ElMessage.warning('请先选择样本再提交审核')
     return
   }
+  if (kmerIncorrectReasonMissing.value) {
+    ElMessage.warning('Kmer AI判定结果被勾选为「不正确」，请先填写不正确原因后再提交')
+    return
+  }
   submitConfirmVisible.value = true
 }
 
@@ -163,6 +174,8 @@ async function confirmSubmit() {
     gc_review: store.selectedCase.gc_result?.executed ? reviewForm.gc : 'uncertain',
     final_decision: reviewForm.finalDecision,
     note: reviewForm.note.trim() || null,
+    kmer_incorrect_reason:
+      reviewForm.kmer === 'incorrect' ? reviewForm.kmerIncorrectReason.trim() || null : null,
   })
   submitConfirmVisible.value = false
   ElMessage.success('人工审核已提交并持久化')
@@ -268,12 +281,14 @@ watch(
       reviewForm.gc = lastReview.gc_review
       reviewForm.finalDecision = (lastReview.final_decision === 'transfer' || lastReview.final_decision === 'rerun' || lastReview.final_decision === 'manual_transfer') ? 'transfer' : 'no_transfer'
       reviewForm.note = lastReview.note || buildJudgeNoteTemplate()
+      reviewForm.kmerIncorrectReason = lastReview.kmer_incorrect_reason || ''
     } else {
       reviewForm.kmer = 'correct'
       reviewForm.nt = 'correct'
       reviewForm.gc = 'correct'
       reviewForm.finalDecision = shouldTransfer === '是' || shouldTransfer === '转人工' ? 'transfer' : 'no_transfer'
       reviewForm.note = buildJudgeNoteTemplate()
+      reviewForm.kmerIncorrectReason = ''
     }
   },
   { immediate: true },
@@ -378,8 +393,8 @@ watch(
           :current-row-key="store.selectedCaseId ?? undefined"
           @row-click="onRowClick"
         >
-          <el-table-column prop="stage_code" label="分期编号" width="120" />
-          <el-table-column label="审核生信" min-width="120" show-overflow-tooltip>
+          <el-table-column prop="stage_code" label="分期编号" min-width="150" />
+          <el-table-column label="审核生信" width="120" show-overflow-tooltip>
             <template #default="{ row }">
               {{ (row.bioinfo_emails?.[0]?.email || '').split('@')[0] || '-' }}
             </template>
@@ -530,6 +545,41 @@ watch(
           </div>
 
           <el-form label-position="top" class="review-form">
+            <el-form-item
+              v-if="reviewForm.kmer === 'incorrect'"
+              label="Kmer 判定不正确原因"
+              class="review-reason-item review-reason-item--required"
+            >
+              <el-input
+                class="review-reason-input"
+                :class="{ 'review-reason-input--error': kmerIncorrectReasonMissing }"
+                v-model="reviewForm.kmerIncorrectReason"
+                type="textarea"
+                :rows="3"
+                maxlength="500"
+                show-word-limit
+                placeholder="请说明 Kmer AI 判定不正确的原因（仅记录用于算法改进，不作为邮件正文发送）"
+              />
+              <div class="review-reason-hint" :class="{ 'is-missing': kmerIncorrectReasonMissing }">
+                该原因仅用于记录与后续校对改进算法，不作为邮件正文发送；未填写时无法提交审核。
+              </div>
+            </el-form-item>
+
+            <el-form-item label="审核备注" class="review-note-item">
+              <el-input
+                class="review-note-input"
+                v-model="reviewForm.note"
+                type="textarea"
+                :rows="7"
+                maxlength="1000"
+                show-word-limit
+                placeholder="请记录人工判断依据、疑点、后续建议"
+              />
+              <div class="review-note-guide">
+                生信可重点审核 AI 判定结果准确性（可点击“AI 自动判定”和“原始报告”查看详情）。若发现不准确，请修改预制审核备注，最终将作为邮件正文发送。
+              </div>
+            </el-form-item>
+
             <div class="review-decision-bar">
               <el-form-item label="审核最终决策" class="review-decision-item">
                 <div class="decision-buttons">
@@ -550,24 +600,18 @@ watch(
                 </div>
               </el-form-item>
               <div class="review-submit-slot">
-                <el-button class="submit-button" type="primary" @click="onSubmitPrototype">提交审核</el-button>
+                <el-tooltip
+                  v-if="kmerIncorrectReasonMissing"
+                  content="Kmer AI判定被勾选为「不正确」，请先填写不正确原因"
+                  placement="top"
+                >
+                  <span>
+                    <el-button class="submit-button" type="primary" disabled>提交审核</el-button>
+                  </span>
+                </el-tooltip>
+                <el-button v-else class="submit-button" type="primary" @click="onSubmitPrototype">提交审核</el-button>
               </div>
             </div>
-
-            <el-form-item label="审核备注">
-              <el-input
-                class="review-note-input"
-                v-model="reviewForm.note"
-                type="textarea"
-                :rows="7"
-                maxlength="1000"
-                show-word-limit
-                placeholder="请记录人工判断依据、疑点、后续建议"
-              />
-              <div class="review-note-guide">
-                生信可重点审核 AI 判定结果准确性（可点击“AI 自动判定”和“原始报告”查看详情）。若发现不准确，请修改预制审核备注，最终将作为邮件正文发送。
-              </div>
-            </el-form-item>
           </el-form>
 
           <div class="review-history" v-if="store.selectedManualReviews.length">
@@ -584,6 +628,9 @@ watch(
               </el-table-column>
               <el-table-column prop="note" label="备注" min-width="200" show-overflow-tooltip>
                 <template #default="{ row }">{{ row.note || '-' }}</template>
+              </el-table-column>
+              <el-table-column label="Kmer不正确原因" min-width="180" show-overflow-tooltip>
+                <template #default="{ row }">{{ row.kmer_incorrect_reason || '-' }}</template>
               </el-table-column>
             </el-table>
           </div>
@@ -839,7 +886,7 @@ watch(
 }
 
 .review-decision-bar {
-  margin-bottom: 8px;
+  margin-top: 4px;
   padding: 10px 12px;
   border: 1px solid #e6ebf2;
   border-radius: 8px;
@@ -870,6 +917,37 @@ watch(
 
 .review-note-input {
   width: 100%;
+}
+
+.review-reason-input {
+  width: 100%;
+}
+
+.review-reason-item--required :deep(.el-form-item__label)::before {
+  content: '*';
+  color: var(--el-color-danger);
+  margin-right: 4px;
+}
+
+.review-reason-hint {
+  margin-top: 6px;
+  padding: 6px 10px;
+  border-radius: 6px;
+  font-size: 12px;
+  line-height: 1.6;
+  border: 1px solid #e6ebf2;
+  background: #f8fbff;
+  color: #667085;
+}
+
+.review-reason-hint.is-missing {
+  border-color: #fbc4c4;
+  background: #fef0f0;
+  color: #c45656;
+}
+
+.review-reason-input--error :deep(.el-textarea__inner) {
+  border-color: var(--el-color-danger);
 }
 
 .review-note-guide {

@@ -534,6 +534,7 @@ def get_manual_reviews(case_id: int, db: Session = Depends(get_db)):
             gc_review=row.gc_review,
             final_decision=row.final_decision,
             note=row.note,
+            kmer_incorrect_reason=row.kmer_incorrect_reason,
             created_at=row.created_at,
             updated_at=row.updated_at,
         )
@@ -552,6 +553,12 @@ def create_manual_review(
     obj = crud.get_case_detail(db, case_id)
     if obj is None:
         raise HTTPException(status_code=404, detail="样本不存在")
+    # kmer AI 判定被勾选为「不正确」时，强制要求填写原因（独立记录，不作为邮件正文）。
+    if payload.kmer_review == "incorrect" and not (payload.kmer_incorrect_reason or "").strip():
+        raise HTTPException(
+            status_code=400,
+            detail="Kmer AI判定结果被勾选为不正确，必须填写不正确原因后才能提交",
+        )
     row = crud.create_manual_review(db, case_id, payload, reviewer=current_user)
     detail = crud.to_case_detail_out(obj)
     _enqueue_survey_done_email(
@@ -571,6 +578,7 @@ def create_manual_review(
         gc_review=row.gc_review,
         final_decision=row.final_decision,
         note=row.note,
+        kmer_incorrect_reason=row.kmer_incorrect_reason,
         created_at=row.created_at,
         updated_at=row.updated_at,
     )

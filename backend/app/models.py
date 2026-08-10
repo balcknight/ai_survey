@@ -209,6 +209,9 @@ class ManualReview(Base):
     gc_review: Mapped[str] = mapped_column(String(16), nullable=False)
     final_decision: Mapped[str] = mapped_column(String(32), nullable=False)
     note: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Kmer AI 判定被勾选为「不正确」时人工填写的原因。
+    # 仅用于记录以便后续校对/改进算法，不作为邮件正文发送（区别于 note）。
+    kmer_incorrect_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False, index=True)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime,

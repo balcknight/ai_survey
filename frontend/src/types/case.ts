@@ -147,6 +147,8 @@ export interface ManualReview {
   gc_review: 'correct' | 'incorrect' | 'uncertain'
   final_decision: 'transfer' | 'no_transfer' | 'confirm' | 'rerun' | 'manual_transfer'
   note: string | null
+  // Kmer 判定不正确原因（仅记录用于算法校对，不作为邮件正文）
+  kmer_incorrect_reason?: string | null
   created_at: string
   updated_at: string
 }
