@@ -4,6 +4,5 @@ data/
 results/
 *.pyc
 __pycache__/
-*.log
 outputs/
 logs/
