@@ -4,6 +4,8 @@ import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { useCasesStore } from '../stores/cases'
 import type { CaseSummary } from '../types/case'
+import { getNtLevelText } from '../constants/case-tags'
+import { formatDatetime } from '../utils/format'
 import { getCaseArchiveUrl, getCaseReportHtmlUrl } from '../api/cases'
 import CaseBoard from '../components/workbench/CaseBoard.vue'
 import UserMenu from '../components/common/UserMenu.vue'
@@ -195,13 +197,6 @@ function decisionText(value: string | null | undefined): string {
   return value
 }
 
-function formatDatetime(iso: string | null | undefined): string {
-  if (!iso) return '-'
-  const d = new Date(iso)
-  const pad = (n: number) => String(n).padStart(2, '0')
-  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`
-}
-
 function buildJudgeNoteTemplate() {
   const report = store.selectedJudgeReport
   const ntAbnormal = yesNoText(report?.nt_abnormal)
@@ -339,7 +334,7 @@ watch(
           <el-button type="primary" plain @click="router.push('/cases')">返回首页</el-button>
         </div>
       </div>
-      <p>审核 survey 自动判定结果，逐项确认 kmer / nt / gc，并记录备注与最终决策。</p>
+      <p>审核 survey 自动判定结果，逐项确认 Kmer / NT / GC，并记录备注与最终决策。</p>
     </header>
 
     <section class="manual-review-page__layout" :style="layoutStyle">
@@ -380,8 +375,8 @@ watch(
         </template>
         <div v-show="leftPaneMode === 'list'">
           <div class="filters">
-          <el-input v-model="store.filters.stage_code" clearable placeholder="stage_code" />
-          <el-input v-model="store.filters.bioinfo_email" clearable placeholder="bioinfo_email" />
+          <el-input v-model="store.filters.stage_code" clearable placeholder="分期号" />
+          <el-input v-model="store.filters.bioinfo_email" clearable placeholder="生信邮箱" />
           <el-select v-model="store.filters.review_status" placeholder="审核状态">
             <el-option label="未审核（默认）" value="unreviewed" />
             <el-option label="已审核" value="reviewed" />
@@ -400,7 +395,7 @@ watch(
           :current-row-key="store.selectedCaseId ?? undefined"
           @row-click="onRowClick"
         >
-          <el-table-column prop="stage_code" label="分期编号" min-width="150" />
+          <el-table-column prop="stage_code" label="分期号" min-width="150" />
           <el-table-column label="审核生信" width="120" show-overflow-tooltip>
             <template #default="{ row }">
               {{ (row.bioinfo_emails?.[0]?.email || '').split('@')[0] || '-' }}
@@ -468,31 +463,31 @@ watch(
         <template v-else>
           <div class="auto-result">
             <div><b>当前审核人:</b> {{ currentReviewerName }}</div>
-            <div><b>自动 final_level:</b> {{ store.selectedCase.final_level || '-' }}</div>
-            <div><b>自动 should_transfer:</b> {{ store.selectedCase.should_transfer || '-' }}</div>
+            <div><b>自动判定等级:</b> {{ store.selectedCase.final_level || '-' }}</div>
+            <div><b>自动流转建议:</b> {{ store.selectedCase.should_transfer || '-' }}</div>
             <div><b>审核生信（邮箱前缀）:</b> {{ bioinfoNamesText }}</div>
-            <div><b>survey.remark:</b> {{ store.selectedCase.survey_result?.remark || '-' }}</div>
+            <div><b>Survey备注:</b> {{ store.selectedCase.survey_result?.remark || '-' }}</div>
           </div>
 
           <div class="ai-judge-panel">
             <div class="ai-judge-panel__title">AI 判定结果（供人工校对）</div>
             <div class="ai-judge-grid">
               <div class="ai-judge-item">
-                <div class="ai-judge-item__title">kmer</div>
+                <div class="ai-judge-item__title">Kmer</div>
                 <div class="ai-judge-fields">
-                  <div><b>kmer.pattern:</b> {{ store.selectedCase.kmer_result?.pattern || '-' }}</div>
-                  <div><b>kmer.is_normal:</b> {{ yesNoText(store.selectedCase.kmer_result?.is_normal) }}</div>
+                  <div><b>Kmer倍型:</b> {{ store.selectedCase.kmer_result?.pattern || '-' }}</div>
+                  <div><b>是否正常:</b> {{ yesNoText(store.selectedCase.kmer_result?.is_normal) }}</div>
                 </div>
                 <div class="ai-judge-links">
-                  <el-button text type="primary" @click="openAiDetail('kmer.detail', store.selectedCase.kmer_result?.detail)">
-                    查看 detail
+                  <el-button text type="primary" @click="openAiDetail('Kmer判定详情', store.selectedCase.kmer_result?.detail)">
+                    查看判定详情
                   </el-button>
                   <el-button
                     text
                     type="primary"
-                    @click="openAiDetail('kmer.warnings', store.selectedCase.kmer_result?.warnings || [])"
+                    @click="openAiDetail('Kmer警告信息', store.selectedCase.kmer_result?.warnings || [])"
                   >
-                    查看 warnings
+                    查看警告信息
                   </el-button>
                 </div>
                 <div class="card-review-row">
@@ -505,18 +500,18 @@ watch(
                 </div>
               </div>
               <div class="ai-judge-item">
-                <div class="ai-judge-item__title">nt</div>
+                <div class="ai-judge-item__title">NT</div>
                 <div class="ai-judge-fields">
-                  <div><b>nt.nt_level:</b> {{ store.selectedCase.nt_result?.nt_level || '-' }}</div>
-                  <div><b>nt.is_heavy_contamination:</b> {{ yesNoText(store.selectedCase.nt_result?.is_heavy_contamination) }}</div>
+                  <div><b>NT判定等级:</b> {{ getNtLevelText(store.selectedCase.nt_result?.nt_level) }}</div>
+                  <div><b>是否重度污染:</b> {{ yesNoText(store.selectedCase.nt_result?.is_heavy_contamination) }}</div>
                 </div>
                 <div class="ai-judge-links">
                   <el-button
                     text
                     type="primary"
-                    @click="openAiDetail('nt.ntspe_detail', store.selectedCase.nt_result?.ntspe_detail)"
+                    @click="openAiDetail('NT物种详情', store.selectedCase.nt_result?.ntspe_detail)"
                   >
-                    查看 ntspe_detail
+                    查看NT物种详情
                   </el-button>
                 </div>
                 <div class="card-review-row">
@@ -529,11 +524,11 @@ watch(
                 </div>
               </div>
               <div class="ai-judge-item">
-                <div class="ai-judge-item__title">gc</div>
+                <div class="ai-judge-item__title">GC</div>
                 <div class="ai-judge-fields">
-                  <div><b>gc.executed:</b> {{ yesNoText(store.selectedCase.gc_result?.executed) }}</div>
-                  <div><b>gc.participated:</b> {{ yesNoText(store.selectedCase.gc_result?.participated ?? store.selectedCase.gc_result?.executed ?? null) }}</div>
-                  <div><b>gc.heavy_contamination:</b> {{ yesNoText(store.selectedCase.gc_result?.heavy_contamination) }}</div>
+                  <div><b>是否执行:</b> {{ yesNoText(store.selectedCase.gc_result?.executed) }}</div>
+                  <div><b>参与最终裁决:</b> {{ yesNoText(store.selectedCase.gc_result?.participated ?? store.selectedCase.gc_result?.executed ?? null) }}</div>
+                  <div><b>是否重度污染:</b> {{ yesNoText(store.selectedCase.gc_result?.heavy_contamination) }}</div>
                 </div>
                 <div class="ai-judge-links" />
                 <div v-if="gcParticipated" class="card-review-row">
@@ -826,7 +821,6 @@ watch(
   font-size: 13px;
   font-weight: 700;
   color: #1f2d3d;
-  text-transform: lowercase;
   letter-spacing: 0.2px;
 }
 

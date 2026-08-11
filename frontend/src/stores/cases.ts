@@ -113,7 +113,7 @@ export const useCasesStore = defineStore('cases', () => {
 
   async function rerunSelectedCase() {
     if (!selectedCase.value?.source_path) {
-      ElMessage.warning('当前样本缺少 source_path，无法重跑')
+      ElMessage.warning('当前样本缺少来源路径，无法重跑')
       return
     }
 

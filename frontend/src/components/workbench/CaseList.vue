@@ -3,6 +3,7 @@ import { computed, onMounted } from 'vue'
 import { useCasesStore } from '../../stores/cases'
 import type { CaseSummary } from '../../types/case'
 import { getFinalLevelTagType } from '../../constants/case-tags'
+import { formatDatetime } from '../../utils/format'
 
 const store = useCasesStore()
 
@@ -30,13 +31,6 @@ function decisionText(value: string | null | undefined): string {
   if (value === 'transfer' || value === 'rerun' || value === 'manual_transfer') return '流转'
   if (value === 'no_transfer' || value === 'confirm') return '不流转'
   return value
-}
-
-function formatDatetime(iso: string | null | undefined): string {
-  if (!iso) return '-'
-  const d = new Date(iso)
-  const pad = (n: number) => String(n).padStart(2, '0')
-  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`
 }
 
 const currentPage = computed({
@@ -80,9 +74,9 @@ onMounted(async () => {
     </template>
 
     <div class="filters">
-      <el-input v-model="store.filters.stage_code" placeholder="stage_code（模糊）" clearable @change="onSearch" />
+      <el-input v-model="store.filters.stage_code" placeholder="分期号（模糊）" clearable @change="onSearch" />
       <el-input v-model="store.filters.target_species" placeholder="物种（模糊）" clearable @change="onSearch" />
-      <el-select v-model="store.filters.final_level" placeholder="final_level" @change="onSearch">
+      <el-select v-model="store.filters.final_level" placeholder="最终等级" @change="onSearch">
         <el-option v-for="item in finalLevelOptions" :key="item.value" :label="item.label" :value="item.value" />
       </el-select>
       <el-select v-model="store.filters.review_status" placeholder="审核状态" @change="onSearch">
@@ -104,9 +98,9 @@ onMounted(async () => {
       @row-click="onRowClick"
     >
       <el-table-column prop="id" label="ID" width="70" />
-      <el-table-column prop="stage_code" label="stage_code" min-width="140" show-overflow-tooltip />
-      <el-table-column prop="target_species" label="target_species" min-width="120" show-overflow-tooltip />
-      <el-table-column prop="final_level" label="final_level" width="130">
+      <el-table-column prop="stage_code" label="分期号" min-width="140" show-overflow-tooltip />
+      <el-table-column prop="target_species" label="目标物种" min-width="120" show-overflow-tooltip />
+      <el-table-column prop="final_level" label="最终等级" width="130">
         <template #default="{ row }">
           <el-tag size="small" :type="getFinalLevelTagType(row.final_level)">
             {{ row.final_level || '-' }}

@@ -2,7 +2,8 @@
 import { computed, ref, watch } from 'vue'
 import { ElMessageBox } from 'element-plus'
 import { useCasesStore } from '../../stores/cases'
-import { formatCellValue, formatLongText } from '../../utils/format'
+import { formatCellValue, formatDatetime, formatLongText } from '../../utils/format'
+import { getCaseStatusText, getGcStatusText, getNtLevelText } from '../../constants/case-tags'
 import { getToken } from '../../utils/auth-token'
 import type { GcLlmRoundSummary, GcPngStep } from '../../types/case'
 
@@ -213,26 +214,24 @@ async function onDelete() {
         <el-card shadow="never">
           <template #header>摘要</template>
           <div class="kv-grid">
-            <div><b>ID:</b> {{ formatCellValue(store.selectedCase?.id) }}</div>
-            <div><b>stage_code:</b> {{ formatCellValue(store.selectedCase?.stage_code) }}</div>
-            <div><b>target_species:</b> {{ formatCellValue(store.selectedCase?.target_species) }}</div>
-            <div><b>status:</b> {{ formatCellValue(store.selectedCase?.status) }}</div>
-            <div><b>final_level:</b> {{ formatCellValue(store.selectedCase?.final_level) }}</div>
-            <div><b>should_transfer:</b> {{ formatCellValue(store.selectedCase?.should_transfer) }}</div>
-            <div><b>source_path:</b> {{ formatCellValue(store.selectedCase?.source_path) }}</div>
-            <div><b>updated_at:</b> {{ formatCellValue(store.selectedCase?.updated_at) }}</div>
+            <div><b>样本ID:</b> {{ formatCellValue(store.selectedCase?.id) }}</div>
+            <div><b>样本编号:</b> {{ formatCellValue(store.selectedCase?.sample_code) }}</div>
+            <div><b>分期号:</b> {{ formatCellValue(store.selectedCase?.stage_code) }}</div>
+            <div><b>目标物种:</b> {{ formatCellValue(store.selectedCase?.target_species) }}</div>
+            <div><b>判定状态:</b> {{ getCaseStatusText(store.selectedCase?.status) }}</div>
+            <div><b>最终等级:</b> {{ formatCellValue(store.selectedCase?.final_level) }}</div>
+            <div><b>是否流转:</b> {{ formatCellValue(store.selectedCase?.should_transfer) }}</div>
+            <div><b>更新时间:</b> {{ formatDatetime(store.selectedCase?.updated_at) }}</div>
           </div>
         </el-card>
 
         <el-card shadow="never">
           <template #header>Kmer 结果</template>
           <div class="kv-grid">
-            <div><b>pattern:</b> {{ formatCellValue(store.selectedCase?.kmer_result?.pattern) }}</div>
-            <div><b>is_normal:</b> {{ formatCellValue(store.selectedCase?.kmer_result?.is_normal) }}</div>
-            <div><b>spe_plot_path:</b> {{ formatCellValue(store.selectedCase?.kmer_result?.spe_plot_path) }}</div>
-            <div><b>num_plot_path:</b> {{ formatCellValue(store.selectedCase?.kmer_result?.num_plot_path) }}</div>
-            <div class="span-2"><b>detail:</b> {{ formatLongText(store.selectedCase?.kmer_result?.detail) }}</div>
-            <div class="span-2"><b>warnings:</b> {{ formatLongText(store.selectedCase?.kmer_result?.warnings) }}</div>
+            <div><b>Kmer倍型:</b> {{ formatCellValue(store.selectedCase?.kmer_result?.pattern) }}</div>
+            <div><b>是否正常:</b> {{ formatCellValue(store.selectedCase?.kmer_result?.is_normal) }}</div>
+            <div class="span-2"><b>判定详情:</b> {{ formatLongText(store.selectedCase?.kmer_result?.detail) }}</div>
+            <div class="span-2"><b>警告信息:</b> {{ formatLongText(store.selectedCase?.kmer_result?.warnings) }}</div>
           </div>
           <div class="kmer-plot-grid">
             <el-card shadow="never">
@@ -263,27 +262,26 @@ async function onDelete() {
         <el-card shadow="never">
           <template #header>NT 结果</template>
           <div class="kv-grid">
-            <div><b>nt_level:</b> {{ formatCellValue(store.selectedCase?.nt_result?.nt_level) }}</div>
-            <div><b>is_heavy_contamination:</b> {{ formatCellValue(store.selectedCase?.nt_result?.is_heavy_contamination) }}</div>
-            <div><b>dominant_category:</b> {{ formatCellValue(store.selectedCase?.nt_result?.dominant_category) }}</div>
-            <div><b>pollution_ratio_percent:</b> {{ formatCellValue(store.selectedCase?.nt_result?.pollution_ratio_percent) }}</div>
-            <div><b>pollution_threshold_percent:</b> {{ formatCellValue(store.selectedCase?.nt_result?.pollution_threshold_percent) }}</div>
-            <div class="span-2"><b>ntcls_detail:</b> {{ formatLongText(store.selectedCase?.nt_result?.ntcls_detail) }}</div>
-            <div class="span-2"><b>ntspe_detail:</b> {{ formatLongText(store.selectedCase?.nt_result?.ntspe_detail) }}</div>
+            <div><b>NT判定等级:</b> {{ getNtLevelText(store.selectedCase?.nt_result?.nt_level) }}</div>
+            <div><b>是否重度污染:</b> {{ formatCellValue(store.selectedCase?.nt_result?.is_heavy_contamination) }}</div>
+            <div><b>主要类别:</b> {{ formatCellValue(store.selectedCase?.nt_result?.dominant_category) }}</div>
+            <div><b>污染占比(%):</b> {{ formatCellValue(store.selectedCase?.nt_result?.pollution_ratio_percent) }}</div>
+            <div><b>污染判定阈值(%):</b> {{ formatCellValue(store.selectedCase?.nt_result?.pollution_threshold_percent) }}</div>
+            <div class="span-2"><b>NT类别详情:</b> {{ formatLongText(store.selectedCase?.nt_result?.ntcls_detail) }}</div>
+            <div class="span-2"><b>NT物种详情:</b> {{ formatLongText(store.selectedCase?.nt_result?.ntspe_detail) }}</div>
           </div>
         </el-card>
 
         <el-card shadow="never">
           <template #header>GC 复核</template>
           <div class="kv-grid">
-            <div><b>executed:</b> {{ formatCellValue(store.selectedCase?.gc_result?.executed) }}</div>
-            <div><b>status:</b> {{ formatCellValue(store.selectedCase?.gc_result?.status) }}</div>
-            <div><b>heavy_contamination:</b> {{ formatCellValue(store.selectedCase?.gc_result?.heavy_contamination) }}</div>
-            <div><b>participated:</b> {{ formatCellValue(store.selectedCase?.gc_result?.participated) }}</div>
-            <div><b>pos_path:</b> {{ formatCellValue(store.selectedCase?.gc_result?.pos_path) }}</div>
-            <div class="span-2"><b>reason:</b> {{ formatLongText(store.selectedCase?.gc_result?.reason) }}</div>
-            <div class="span-2"><b>gc_raw.decision:</b> {{ formatLongText(gcDecision) }}</div>
-            <div class="span-2"><b>gc_raw.global_stats:</b> {{ formatLongText(gcGlobalStats) }}</div>
+            <div><b>是否执行:</b> {{ formatCellValue(store.selectedCase?.gc_result?.executed) }}</div>
+            <div><b>GC状态:</b> {{ getGcStatusText(store.selectedCase?.gc_result?.status) }}</div>
+            <div><b>是否重度污染:</b> {{ formatCellValue(store.selectedCase?.gc_result?.heavy_contamination) }}</div>
+            <div><b>参与最终裁决:</b> {{ formatCellValue(store.selectedCase?.gc_result?.participated) }}</div>
+            <div class="span-2"><b>原因说明:</b> {{ formatLongText(store.selectedCase?.gc_result?.reason) }}</div>
+            <div class="span-2"><b>GC判定依据:</b> {{ formatLongText(gcDecision) }}</div>
+            <div class="span-2"><b>全局统计:</b> {{ formatLongText(gcGlobalStats) }}</div>
           </div>
           <!-- 新数据：GC 判定演进（步骤快照 + LLM 思考） -->
           <div v-if="gcHasSteps" class="gc-evolution">
@@ -298,7 +296,7 @@ async function onDelete() {
                 <el-tag size="small" :type="gcStageTagType(s.stage)">{{ gcStageText(s.stage) }}</el-tag>
                 <div class="gc-step-item__label">{{ s.label }}</div>
                 <div v-if="s.contam_over_total_ratio != null" class="gc-step-item__ratio">
-                  ratio={{ Number(s.contam_over_total_ratio).toFixed(4) }}
+                  污染占比={{ Number(s.contam_over_total_ratio).toFixed(4) }}
                 </div>
               </div>
             </div>
@@ -313,16 +311,16 @@ async function onDelete() {
                 <template #header>当前步骤：{{ gcActiveStep?.label }}</template>
                 <div class="kv-grid">
                   <div><b>阶段:</b> {{ gcStageText(gcActiveStep?.stage) }}</div>
-                  <div><b>contam/total:</b> {{ formatCellValue(gcActiveStep?.contam_over_total_ratio) }}</div>
-                  <div><b>gc_start:</b> {{ formatCellValue(gcActiveStep?.line?.gc_start) }}</div>
+                  <div><b>污染占比:</b> {{ formatCellValue(gcActiveStep?.contam_over_total_ratio) }}</div>
+                  <div><b>污染带起点(gc_start):</b> {{ formatCellValue(gcActiveStep?.line?.gc_start) }}</div>
                   <div>
-                    <b>d_left / d_right:</b>
+                    <b>边界线深度(d_left/d_right):</b>
                     {{ formatCellValue(gcActiveStep?.line?.d_left) }} / {{ formatCellValue(gcActiveStep?.line?.d_right) }}
                   </div>
-                  <div><b>slope:</b> {{ formatCellValue(gcActiveStep?.line?.slope) }}</div>
-                  <div><b>intercept:</b> {{ formatCellValue(gcActiveStep?.line?.intercept) }}</div>
+                  <div><b>边界线斜率(slope):</b> {{ formatCellValue(gcActiveStep?.line?.slope) }}</div>
+                  <div><b>边界线截距(intercept):</b> {{ formatCellValue(gcActiveStep?.line?.intercept) }}</div>
                   <div class="span-2">
-                    <b>LLM reason:</b>
+                    <b>LLM调整原因:</b>
                     {{ formatLongText(gcActiveRoundDetail?.reason ?? gcActiveStep?.note ?? null) }}
                   </div>
                 </div>
@@ -360,12 +358,12 @@ async function onDelete() {
         </el-card>
 
         <el-card shadow="never">
-          <template #header>Survey + Result Metrics</template>
+          <template #header>Survey 判定与结果指标</template>
           <div class="kv-grid">
-            <div><b>survey.final_level:</b> {{ formatCellValue(store.selectedCase?.survey_result?.final_level) }}</div>
-            <div><b>survey.should_transfer:</b> {{ formatCellValue(store.selectedCase?.survey_result?.should_transfer) }}</div>
+            <div><b>最终等级:</b> {{ formatCellValue(store.selectedCase?.survey_result?.final_level) }}</div>
+            <div><b>是否流转:</b> {{ formatCellValue(store.selectedCase?.survey_result?.should_transfer) }}</div>
             <div class="span-2">
-              <b>survey.remark:</b>
+              <b>Survey备注:</b>
               <div class="remark-content" :class="{ 'remark-content--collapsed': !showSurveyRemark }">
                 {{ formatLongText(store.selectedCase?.survey_result?.remark) }}
               </div>
@@ -373,10 +371,10 @@ async function onDelete() {
                 {{ showSurveyRemark ? '收起' : '展开' }}
               </el-button>
             </div>
-            <div><b>ploidy_pattern:</b> {{ formatCellValue(store.selectedCase?.result_metrics?.ploidy_pattern) }}</div>
-            <div><b>ploidy_multiplier:</b> {{ formatCellValue(store.selectedCase?.result_metrics?.ploidy_multiplier) }}</div>
+            <div><b>倍型:</b> {{ formatCellValue(store.selectedCase?.result_metrics?.ploidy_pattern) }}</div>
+            <div><b>倍型系数:</b> {{ formatCellValue(store.selectedCase?.result_metrics?.ploidy_multiplier) }}</div>
             <div class="span-2">
-              <b>metrics.remark:</b>
+              <b>结果备注:</b>
               <div class="remark-content" :class="{ 'remark-content--collapsed': !showMetricsRemark }">
                 {{ formatLongText(store.selectedCase?.result_metrics?.remark) }}
               </div>
@@ -387,14 +385,14 @@ async function onDelete() {
           </div>
 
           <div class="result-metrics-table">
-            <h4>Result Metrics 对比（raw / adjusted）</h4>
-            <el-empty v-if="resultMetricCompareRows.length === 0" description="无 raw/adjusted 数据" :image-size="80" />
+            <h4>结果指标对比（原始值 / 倍型修正值）</h4>
+            <el-empty v-if="resultMetricCompareRows.length === 0" description="无原始/修正数据" :image-size="80" />
             <el-table v-else :data="resultMetricCompareRows" size="small" border>
-              <el-table-column prop="key" label="字段" min-width="220" />
-              <el-table-column label="raw" min-width="180">
+              <el-table-column prop="key" label="指标" min-width="220" />
+              <el-table-column label="原始值" min-width="180">
                 <template #default="{ row }">{{ formatCellValue(row.raw) }}</template>
               </el-table-column>
-              <el-table-column label="adjusted" min-width="180">
+              <el-table-column label="修正值" min-width="180">
                 <template #default="{ row }">{{ formatCellValue(row.adjusted) }}</template>
               </el-table-column>
             </el-table>

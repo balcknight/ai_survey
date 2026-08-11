@@ -104,6 +104,7 @@
 - 对老库做 `ALTER TABLE ... ADD COLUMN` 补列（SQLite 的 `ADD COLUMN` 不支持附带 `FOREIGN KEY`/`UNIQUE` 约束，故老库中这些列为普通可空列，业务层不依赖 DB 级约束）：
   - `survey_cases`：`stage_code/contact_name/contact_email/cc_emails_json/bioinfo_emails_json/operation_emails_json/group_emails_json/archive_path`
   - `manual_reviews`：`reviewer_id`（并建索引）、`kmer_incorrect_reason`
+  - `gc_results`：`participated`（并建索引；老记录为 NULL，前端按 `executed` 回退展示）
 - `users` 表为空时自动创建默认管理员（见「鉴权设计」）。
 
 ## V1 已实现接口
@@ -460,7 +461,9 @@ curl -X DELETE "$BASE_URL/api/cases/12"
 ```
 
 #### 行为说明
-- 删除样本记录时会同步删除该样本关联的峰图文件（仅清理 `data/kmer_plots/` 受管目录内文件）。
+- 删除样本记录时会同步清理该样本关联的受管产物：
+  - kmer 峰图（仅 `data/kmer_plots/` 内）；
+  - GC 全部产物：终帧 `*.gc_line.png`、`*.gc_line.json`、演进步骤 `*.gc_line.step{N}.png`（含同 stem glob 兜底孤儿文件）、LLM 日志 `*.gc_line.llm_log.json`（仅 `data/gc_plots/` 内，非受管路径忽略并计入响应提示）。
 
 ### 18) 样本统计（GET /api/cases/stats）
 #### 说明

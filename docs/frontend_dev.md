@@ -139,20 +139,62 @@ npm run dev -- --host 0.0.0.0 --port 5173
 - 卡片：样本总数 / 正常 / 重度污染 / 待人工复核 / 已审核占比
 - 数据来源：`GET /api/cases/stats`
 3. 样本列表区（CaseList）
-- 筛选：`stage_code`（模糊）、`target_species`（模糊）、`final_level`、审核状态、审核结论
+- 筛选：分期号（模糊）、物种（模糊）、最终等级、审核状态、审核结论
 - 筛选项变更即自动触发检索（无独立查询/重置按钮）
 - 点击行以抽屉形式打开详情看板（CaseBoard）
 
 ### CaseBoard GC 演进展示
 - GC 复核卡片在有 `gc_raw.artifacts.png_steps` 时展示**判定演进过程**（算法第一遍 → LLM 逐轮调整 → 最终帧）：
-  - 左列为可点击的步骤列表（阶段 el-tag + 步骤标签 + `contam/total` ratio），默认选中最终帧；
+  - 左列为可点击的步骤列表（阶段 el-tag + 步骤标签 + 污染占比），默认选中最终帧；
   - 右列为当前步骤大图（点击复用现有 `openPlotPreview` 弹层放大）与当前步骤信息卡
-    （阶段、`gc_start/d_left/d_right/slope/intercept`、ratio、LLM reason）；
-  - LLM reason 优先取 `gc_raw.llm_adjustment.rounds_detail[]` 中对应轮的 `reason`，无则回退步骤 `note`。
+    （阶段、污染占比、污染带起点(gc_start)、边界线深度(d_left/d_right)、边界线斜率(slope)、边界线截距(intercept)、LLM调整原因）；
+  - LLM调整原因优先取 `gc_raw.llm_adjustment.rounds_detail[]` 中对应轮的 `reason`，无则回退步骤 `note`。
 - 图片 URL 在现有 `?t=`/`?token=` 基础上追加 `?step={index}`（后端 `GET /api/cases/{id}/gc-plot?step=N`）；
   切换样本时步骤选择复位到最终帧。
 - 老数据（无 `png_steps`）回退为原有单图展示，URL 不带 `step`；GC 失败样本显示空态文案。
-- GC 复核卡片 kv 区新增 `participated` 字段（本次 GC 是否参与最终裁决）。
+- GC 复核卡片 kv 区展示「参与最终裁决」（即 `participated`，本次 GC 是否参与最终裁决）。
+
+### 展示规范（字段中文化与友好时间）
+- 页面不直接暴露后端英文字段名与内部路径，统一改用契合业务背景的中文标签；路径类字段（`source_path/spe_plot_path/num_plot_path/pos_path` 等）一律不展示（峰图/GC 图以图片形式展示，重跑由后端按已存路径执行）。
+- 时间字段（`updated_at/created_at`）统一经 `src/utils/format.ts` 的 `formatDatetime` 格式化为 `YYYY-MM-DD HH:mm`（本地时区，精确到分钟），不再展示 ISO 原始值。
+- 枚举值中文映射集中在 `src/constants/case-tags.ts`：
+  - 样本状态：`created→已创建 / kmer_done→Kmer完成 / nt_done→NT完成 / judged→已判定 / failed→失败`；
+  - GC 状态：`ok→正常 / fail→失败 / skipped→未执行`（未知值原样展示）；
+  - NT 判定等级：`fail→判定失败`（`正常/重度污染` 原样展示）。
+- 看板字段标签映射（后端字段 -> 前端展示）：
+
+| 后端字段 | 前端展示 |
+| --- | --- |
+| `id` | 样本ID |
+| `sample_code` | 样本编号 |
+| `stage_code` | 分期号 |
+| `target_species` | 目标物种 |
+| `status` | 判定状态 |
+| `final_level` / `survey_result.final_level` | 最终等级 |
+| `should_transfer` / `survey_result.should_transfer` | 是否流转 |
+| `updated_at` | 更新时间 |
+| `kmer_result.pattern` | Kmer倍型 |
+| `kmer_result.is_normal` | 是否正常 |
+| `kmer_result.detail` | 判定详情 |
+| `kmer_result.warnings` | 警告信息 |
+| `nt_result.nt_level` | NT判定等级 |
+| `nt_result.is_heavy_contamination` / `gc_result.heavy_contamination` | 是否重度污染 |
+| `nt_result.dominant_category` | 主要类别 |
+| `nt_result.pollution_ratio_percent` | 污染占比(%) |
+| `nt_result.pollution_threshold_percent` | 污染判定阈值(%) |
+| `nt_result.ntcls_detail` | NT类别详情 |
+| `nt_result.ntspe_detail` | NT物种详情 |
+| `gc_result.executed` | 是否执行 |
+| `gc_result.status` | GC状态 |
+| `gc_result.participated` | 参与最终裁决 |
+| `gc_result.reason` | 原因说明 |
+| `gc_raw.decision` | GC判定依据 |
+| `gc_raw.global_stats` | 全局统计 |
+| `survey_result.remark` | Survey备注 |
+| `result_metrics.ploidy_pattern` | 倍型 |
+| `result_metrics.ploidy_multiplier` | 倍型系数 |
+| `result_metrics.remark` | 结果备注 |
+
 
 ## 人工审核页设计（/review-prototype）
 
@@ -164,8 +206,8 @@ npm run dev -- --host 0.0.0.0 --port 5173
 
 ### 审核单（右侧面板）结构
 自上而下：
-1. 自动结果摘要（`auto-result`）：当前审核人、自动 `final_level`、自动 `should_transfer`、审核生信（邮箱前缀）、`survey.remark`。
-2. AI 判定结果区（`ai-judge-panel`）：kmer / nt / gc 三栏，展示各自 AI 判定字段、详情入口（查看 detail/warnings/ntspe_detail）与「人工确认」单选（`correct|incorrect|uncertain`）。GC 每次 survey 都会执行，但 gc 栏的人工确认单选仅在 `gc_result.participated=true`（kmer 无警告且 kmer/NT 不一致）时出现；未参与裁决时显示“GC 未参与裁决”占位（老数据 `participated` 为 null 时按 `executed` 回退）。
+1. 自动结果摘要（`auto-result`）：当前审核人、自动判定等级、自动流转建议、审核生信（邮箱前缀）、Survey备注。
+2. AI 判定结果区（`ai-judge-panel`）：Kmer / NT / GC 三栏，展示各自 AI 判定字段（中文标签，见「展示规范」）、详情入口（查看判定详情 / 查看警告信息 / 查看NT物种详情）与「人工确认」单选（`correct|incorrect|uncertain`）。GC 每次 survey 都会执行，但 gc 栏的人工确认单选仅在 `gc_result.participated=true`（kmer 无警告且 kmer/NT 不一致）时出现；未参与裁决时显示“GC 未参与裁决”占位（老数据 `participated` 为 null 时按 `executed` 回退）。
 3. 审核表单（`el-form`）：
    - **Kmer 判定不正确原因**（`kmer_incorrect_reason`，多行文本）——仅当「人工确认 kmer」为 `incorrect` 时显示，必填。
    - **审核备注**（`note`，多行文本）——作为邮件正文发送。
@@ -206,6 +248,8 @@ npm run dev -- --host 0.0.0.0 --port 5173
 - `src/api/auth.ts`：login / logout / me API 封装
 - `src/types/case.ts`：类型定义
 - `src/types/auth.ts`：AuthUser / LoginResponse 类型
+- `src/constants/case-tags.ts`：Tag 颜色映射 + 枚举值中文映射（样本状态/GC状态/NT等级）
+- `src/utils/format.ts`：单元格值 / 长文本 / 时间（`formatDatetime`）统一格式化
 - `src/utils/auth-token.ts`：token 存取与资源 URL 追加 token
 
 ### `SurveyWorkbenchView.vue`（页面编排层）
@@ -222,16 +266,17 @@ npm run dev -- --host 0.0.0.0 --port 5173
 ### `CaseList.vue`（列表与筛选层）
 - 职责：展示样本摘要列表，提供筛选、分页、行选择。
 - 关键状态来源：`store.list` / `store.loadingList` / `store.total` / `store.filters`。
-- 展示列：`ID / stage_code / target_species / final_level / 最终决策 / 更新时间`（不展示 `sample_code`）。
+- 展示列：`ID / 分期号 / 目标物种 / 最终等级 / 最终决策 / 更新时间`（不展示 `sample_code`；更新时间经 `formatDatetime` 格式化为 `YYYY-MM-DD HH:mm`）。
 - 筛选项（变更即自动触发检索，无独立查询/重置按钮）：
-  - `stage_code`（模糊）、`target_species`（模糊）文本框：失焦 / 回车 / 清空时触发。
-  - `final_level`、审核状态、审核结论下拉：变更时触发。
+  - 分期号（模糊）、物种（模糊）文本框：失焦 / 回车 / 清空时触发。
+  - 最终等级、审核状态、审核结论下拉：变更时触发。
 - 关键行为：挂载时 `loadList()` 拉取第一页；点击行触发 `store.selectCase(row.id)` 并联动打开详情抽屉；触发检索时重置 `offset=0`。
 - 视觉语义：`final_level` 使用 Tag 颜色映射常量统一管理；当前选中行使用高亮类名 `case-list__row--active`。
 
 ### `CaseBoard.vue`（详情展示与高风险操作层）
 - 职责：展示完整样本详情，并承载“重跑/删除”高风险动作。
-- 内容分区：摘要信息、Kmer 结果、NT 结果、Survey + Result Metrics（含 `raw/adjusted` 对比表）。
+- 内容分区：摘要、Kmer 结果、NT 结果、GC 复核、判定报告、Survey 判定与结果指标（含原始值/修正值对比表）。
+- 展示约定：字段一律使用中文业务标签（见「展示规范」）；路径类字段不展示，峰图/GC 图以图片展示；时间经 `formatDatetime` 格式化。
 - 关键行为：监听 `selectedCaseId`，切换样本时重置 remark 展开态；“重跑 survey”“删除”均要求二次确认弹窗。
 
 ### `stores/cases.ts`（业务中枢）
