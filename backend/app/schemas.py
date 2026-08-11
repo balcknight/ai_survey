@@ -73,6 +73,7 @@ class GcResultIn(BaseModel):
     reason: str | None = None
     pos_path: str | None = None
     heavy_contamination: bool | None = None
+    participated: bool | None = None
     gc_raw: dict[str, Any] | None = None
     raw_payload: dict[str, Any] | None = None
 
@@ -162,6 +163,7 @@ class GcResultOut(BaseModel):
     reason: str | None = None
     pos_path: str | None = None
     heavy_contamination: bool | None = None
+    participated: bool | None = None
     gc_raw: dict[str, Any] | None = None
     created_at: datetime | None = None
     updated_at: datetime | None = None

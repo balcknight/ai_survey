@@ -39,6 +39,43 @@ export interface PeaksData {
   freqs: number[]
 }
 
+/** GC 边界线参数（png_steps[].line） */
+export interface GcLineParams {
+  gc_start?: number | null
+  d_left?: number | null
+  d_right?: number | null
+  slope?: number | null
+  intercept?: number | null
+}
+
+/** GC 判定演进步骤快照（gc_raw.artifacts.png_steps[]） */
+export interface GcPngStep {
+  index: number
+  stage: 'algo' | 'llm_round' | 'final'
+  label: string
+  note?: string | null
+  png: string
+  round?: number | null
+  line?: GcLineParams | null
+  contam_over_total_ratio?: number | null
+}
+
+/** GC LLM 单轮复核摘要（gc_raw.llm_adjustment.rounds_detail[]） */
+export interface GcLlmRoundSummary {
+  round: number
+  action?: string | null
+  has_contamination?: boolean | null
+  reason?: string | null
+  proposed?: Record<string, unknown> | null
+  clamped?: Record<string, unknown> | null
+  stats_after?: Record<string, unknown> | null
+  retried_parse?: boolean | null
+  parse_error?: string | null
+  error?: string | null
+  elapsed_sec?: number | null
+  png_step_index?: number | null
+}
+
 export interface CaseDetail
   extends Omit<
     CaseSummary,
@@ -91,6 +128,8 @@ export interface CaseDetail
     reason: string | null
     pos_path: string | null
     heavy_contamination: boolean | null
+    /** 本次 GC 是否参与最终裁决（老数据为 null，前端按 executed 回退） */
+    participated?: boolean | null
     gc_raw: Record<string, unknown> | null
     created_at?: string | null
     updated_at?: string | null

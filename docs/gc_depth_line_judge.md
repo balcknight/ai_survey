@@ -32,8 +32,12 @@
 
 5. 全局计数与污染判定
 - 污染点定义为：
-  `gc >= contam_gc_start` 且 `depth <= low_depth_max` 且 `depth <= slope*gc+intercept`
-- `line_below_count`：污染区域内点数。
+  `depth <= low_depth_max` 且 `depth <= slope*gc+intercept`
+  （全 GC 区间统计，**不再限制 `gc >= contam_gc_start`**；边界线自 GC=20 画至 GC=95）
+- `gc_start`（污染带 GC 起点检测）的角色：污染带**存在性门控**（未检出则不拟合线）、
+  拟合区域左端点、以及边界线的深度锚点（`d_left` 为线在 `GC=gc_start` 处的深度）；
+  仅用于输出 `contam_gc_start` 与 `low_depth_region_count`（诊断口径，保持污染带区域内统计）。
+- `line_below_count`：污染点数（线下方、`depth<=low_depth_max` 的全 GC 区间点）。
 - `line_on_count`：非污染区域点数。
 - `contam_over_total_ratio = line_below_count / total_points`。
 - `below_over_on_ratio = line_below_count / line_on_count` 仅保留作兼容诊断。
@@ -50,13 +54,20 @@
 - 拟合结果（是否存在线、`slope/intercept` 等）
 - 全局统计（污染区点数、污染占总点数比例、诊断带宽计数）
 - 判定结果（`heavy_contamination`）
+- LLM 复核摘要（`llm_adjustment`）：状态/轮数/最终动作，以及 `rounds_detail`
+  （逐轮精简摘要：action/reason/提议值/clamp 值/统计变化，不含 prompt 原文）
+- 演进步骤（`artifacts.png_steps`）：每步的 `index/stage/label/png/line/contam_over_total_ratio`，
+  `stage` 取值 `algo`（第一遍）/`llm_round`（LLM 第 N 轮调整）/`final`（最终帧）
 
-2. PNG（默认 `outputs/gc_line/<样本名>.gc_line.png`）
-- GC-Depth 二维密度图（高密度偏红）
-- `Depth=low_depth_max` 参考虚线
-- 主脊线
-- 污染区上边界线与带宽（±eps）
-- 污染区 GC 起点
+2. PNG
+- 终帧：`outputs/gc_line/<样本名>.gc_line.png`（即 `artifacts.png`，向后兼容）
+- 演进步骤快照：`<样本名>.gc_line.step{N}.png`（每次渲染各保留一张，重跑前自动清理旧快照）
+- 图内容：
+  - GC-Depth 二维密度图（高密度偏红）
+  - `Depth=low_depth_max` 参考虚线
+  - 主脊线
+  - 污染区上边界线（**自 GC=20 画至 GC=95**，不再有左侧起点限制）与带宽（±eps）
+  - 绿色竖直点线已移除（gc_start 仅作内部锚点/门控，不在图上标出）
 
 ---
 

@@ -74,6 +74,7 @@ def _upsert_gc(db: Session, case_id: int, payload: schemas.GcResultIn) -> models
     obj.reason = payload.reason
     obj.pos_path = payload.pos_path
     obj.heavy_contamination = payload.heavy_contamination
+    obj.participated = payload.participated
     obj.gc_raw_json = to_json_text(payload.gc_raw)
     obj.raw_json = to_json_text(payload.raw_payload)
     return obj
@@ -617,6 +618,7 @@ def to_case_detail_out(obj: models.SurveyCase) -> schemas.CaseDetailOut:
             reason=obj.gc_result.reason,
             pos_path=obj.gc_result.pos_path,
             heavy_contamination=obj.gc_result.heavy_contamination,
+            participated=obj.gc_result.participated,
             gc_raw=from_json_text(obj.gc_result.gc_raw_json, None),
             created_at=obj.gc_result.created_at,
             updated_at=obj.gc_result.updated_at,

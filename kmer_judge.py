@@ -972,7 +972,7 @@ if __name__ == '__main__':
         #    左侧鞍部干掉 base_path = '/data/work/zhurui/survey_rec/data/shenshaoqi_data/survey1/X101SC2511/X101SC25114474-Z02-J002/FDSW250056744-1r_1/1.17merFreq'
 
 
-    base_path = '/data/work/zhurui/survey_rec/data/to_zhurui_surey_jinxianlan/FDSW260016098-2r_DaYuanYe叶-1/DaYuanYe叶-1.17merFreq'
+    base_path = '/data/work/zhurui/ai_survey/data/to_zhurui_surey_jinxianlan/FDSW260016098-2r_DaYuanYe叶-1/DaYuanYe叶-1.17merFreq'
     res = main_dual(
         spe_filepath=f'{base_path}.SpeFreq.cut',
         num_filepath=f'{base_path}.NumFreq.cut',

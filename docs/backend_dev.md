@@ -50,11 +50,12 @@
 - `raw_json`
 
 ### 4. gc_results（1:1）
-- `executed`（是否执行了 GC 判定）
+- `executed`（是否执行了 GC 判定；GC 现随每次 survey 无条件执行）
 - `status`（GC 判定状态）
 - `reason`（未执行/异常原因）
 - `pos_path`（`*.pos` 文件路径）
 - `heavy_contamination`（GC 维度是否判定重度污染）
+- `participated`（本次 GC 结果是否参与最终裁决；仅 kmer 无警告且 kmer/NT 不一致时为 true，老库补列后为 NULL）
 - `gc_raw_json` / `raw_json`
 
 ### 5. survey_results（1:1）
@@ -193,7 +194,11 @@ SAMPLE_DIR1="data/shenshaoqi_data_v2/1"
 
 ### 4) 获取 GC 图（GET /api/cases/{case_id}/gc-plot）
 #### 说明
-- 返回已生成的 GC 图 PNG。
+- 返回已生成的 GC 图 PNG；可选查询参数 `step`（`ge=0`）用于获取**演进步骤快照**：
+  - 不传 `step`：返回最终帧（`gc_raw.artifacts.png`），与历史行为完全一致；
+  - 传 `step=N`：返回 `gc_raw.artifacts.png_steps` 中 `index==N` 的步骤图
+    （`algo`/`llm_round`/`final` 各帧）；step 越界或老数据无步骤快照时返回 404。
+- 所有返回路径均校验必须位于受管目录 `data/gc_plots/` 内，否则 403。
 - 若未生成或路径非法，接口返回 404/403。
 
 ### 5) 获取判定报告（GET /api/cases/{case_id}/judge-report）
@@ -551,7 +556,8 @@ curl -X GET "$BASE_URL/api/cases/12/kmer-plot?spectrum=spe&token=$TOKEN"
 - `case_id`：数据库中的样本主键，可用于后续 `GET /api/cases/{case_id}` 查询。
 - `run-survey/rerun-survey/run-by-path` 的判定入口统一与 `survey_judge_single.py` 对齐：目标物种由 `all.ntcls.xls` 首行 `Sample name` 推导，并同时用于 kmer 与 nt。
 - `run-kmer/run-survey/rerun-survey/run-by-path` 会自动绘制 Spe/Num 峰图，并写入 `kmer_result.spe_plot_path/num_plot_path`。
-- `run-survey/run-by-path/run-by-archive` 会始终尝试生成 GC 图用于展示；是否参与最终裁决仍按原有 GC 触发规则，不改变判定逻辑。
+- `run-survey/run-by-path/run-by-archive/rerun-survey` 中 GC 复核随 survey **无条件执行**（产出 GC 图与判定数据用于展示/追溯）；是否参与最终裁决由 `gc_result.participated` 标识——仅 kmer 无警告且 kmer/NT 判定不一致时为 true，其余情况 GC 仅展示、不改变判定逻辑。`run-by-path/run-by-archive` 入库前另由 `_ensure_gc_plot_artifacts` 兜底补图（GC 首次执行未产出 PNG 时重试一次，失败仅加 warning）。
+- GC 产物落盘于受管目录 `data/gc_plots/<样本名>_<sha1前16位>/`：终帧 `*.gc_line.png`、JSON `*.gc_line.json`、演进步骤 `*.gc_line.step{N}.png`、LLM 日志 `*.gc_line.llm_log.json`；`DELETE /api/cases/{id}` 会按 `gc_raw.artifacts.png_steps` 与 `llm_adjustment.log_path` 收集全部路径清理（并对同 stem `*.step*.png` 做 glob 兜底），非受管路径忽略。
 - 峰图统一输出到固定目录 `data/kmer_plots/`（按 `sample_dir` 哈希分桶），不再写回样本目录。
 
 ## run-survey 响应示例（精简）

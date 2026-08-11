@@ -136,6 +136,8 @@ class GcResult(Base):
     reason: Mapped[str | None] = mapped_column(Text, nullable=True)
     pos_path: Mapped[str | None] = mapped_column(Text, nullable=True)
     heavy_contamination: Mapped[bool | None] = mapped_column(Boolean, nullable=True, index=True)
+    # 本次 GC 结果是否参与最终裁决（仅 kmer 无警告且 kmer/NT 不一致时为 True；老库补列后为 NULL）
+    participated: Mapped[bool | None] = mapped_column(Boolean, nullable=True, index=True)
     gc_raw_json: Mapped[str | None] = mapped_column(Text, nullable=True)
     raw_json: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)

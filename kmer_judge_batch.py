@@ -8,9 +8,9 @@ import pandas as pd
 from kmer_judge import main_dual
 
 
-EXCEL_PATH = '/data/work/zhurui/survey_rec/data/survey 信息表.xlsx'
+EXCEL_PATH = '/data/work/zhurui/ai_survey/data/survey 信息表.xlsx'
 SHEET_NAME = '处理后信息'
-BASE_PATH = '/data/work/zhurui/survey_rec/data/shenshaoqi_data/survey1'
+BASE_PATH = '/data/work/zhurui/ai_survey/data/shenshaoqi_data/survey1'
 
 KMER_PATTERN_CN = {
     'diploid_homo': '纯合二倍体',

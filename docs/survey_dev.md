@@ -218,10 +218,17 @@ print(data["analysis_ploidy"]["enabled"], data["warnings"])
 
 ### 综合判定逻辑
 
+> **GC 执行时机说明**：GC 复核在**每次** survey 判定中都无条件执行（产出 GC 图与判定数据，
+> 便于前端展示与追溯，`gc_result.executed=true`）；但是否**参与最终裁决**由下方规则决定——
+> 仅当 kmer 无警告且 kmer 与 NT 判定不一致时参与（`gc_result.participated=true`），
+> 其余情况下 `participated=false`，GC 结果仅用于展示，不影响 `survey_result`。
+> GC 执行失败（如无 `.pos` 文件）不会阻断非冲突样本的判定流程。
+
 1. `kmer.warnings` 非空：
    - `survey_result.should_transfer = 转人工`
    - `survey_result.final_level = 待人工复核`
    - 备注：`kmer存在警告信息，转人工复核`
+   - GC 照常执行但不参与裁决（`participated=false`）
 
 2. `NT` 判定为 `fail`：
    - `survey_result.should_transfer = 转人工`
@@ -232,8 +239,8 @@ print(data["analysis_ploidy"]["enabled"], data["warnings"])
    - 按常规规则判定（见下表）
 
 4. `kmer` 与 `NT` 判定不一致（`kmer正常+NT重度污染` 或 `kmer异常+NT正常`）时：
-   - 触发 GC 判定（自动定位同目录下 `*.pos`）
-   - GC 重度污染阈值：`contam_over_total_ratio`（= 污染区域点数 `line_below_count` / 总点数）`> 0.07` 记为重度污染，否则记为正常（`below/on` 仅保留作诊断字段，不参与判定）。
+   - GC 判定结果参与裁决（`participated=true`，GC 已随本次 survey 执行）
+   - GC 重度污染阈值：`contam_over_total_ratio`（= 污染点数 `line_below_count` / 总点数，全 GC 区间、线下方且 `depth<=low_depth_max`）`> 0.07` 记为重度污染，否则记为正常（`below/on` 仅保留作诊断字段，不参与判定）。
    - 若 GC 判定失败，则：
      - `survey_result.should_transfer = 转人工`
      - `survey_result.final_level = 待人工复核`
@@ -281,7 +288,7 @@ GC 判定失败的常见原因（转人工合理）：
 | spe_main_peak_depth / num_main_peak_depth | SpeFreq/NumFreq 各自主峰深度（按最终判型使用峰计算） |
 | target_species | 从 `all.ntcls.xls` 读取的目标物种名 |
 | nt_result | NT聚合判定对象：如 `nt_level/is_heavy_contamination/nt_rule_version/target_species/target_category/source_nt_count/valid_nt_count/dominant_category/dominant_ratio_percent/pollution_ratio_percent/pollution_threshold_percent/class_filtered_path/class_filtered_paths/small_judged_paths/nt_results/ntcls_detail/ntspe_detail` |
-| gc_result | GC复核结果对象：`executed/status/reason`；执行成功时额外包含 `pos_path/heavy_contamination/gc_raw`（详细判定位于 `gc_raw.decision/global_stats/artifacts`） |
+| gc_result | GC复核结果对象：`executed/status/reason/participated`（`participated=true` 表示本次 GC 参与最终裁决，仅 kmer 无警告且 kmer/NT 不一致时成立）；执行成功时额外包含 `pos_path/heavy_contamination/gc_raw`（详细判定位于 `gc_raw.decision/global_stats/artifacts`，演进过程位于 `gc_raw.artifacts.png_steps` 与 `gc_raw.llm_adjustment.rounds_detail`） |
 | survey_result | 综合结果对象：`final_level/should_transfer/remark` |
 | result_metrics | 从 `*.Result.xls` 读取并修正后的结果对象：`result_path/ploidy_pattern/ploidy_multiplier/raw/adjusted/remark` |
 

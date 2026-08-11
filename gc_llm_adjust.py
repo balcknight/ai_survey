@@ -18,7 +18,7 @@ import base64
 import json
 import re
 import time
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable
@@ -48,6 +48,7 @@ class LlmAdjustmentOutcome:
     final_params: dict | None  # {gc_start,d_left,d_right,slope,intercept}；no_contamination/降级时为 None 或当前线
     log_path: str | None
     error: str | None = None
+    rounds_detail: list[dict] = field(default_factory=list)  # 逐轮精简摘要（不含 prompt/raw_response）
 
     def summary(self) -> dict:
         out = {
@@ -56,6 +57,7 @@ class LlmAdjustmentOutcome:
             "rounds": self.rounds,
             "final_action": self.final_action,
             "log_path": self.log_path,
+            "rounds_detail": self.rounds_detail,
         }
         if self.error:
             out["error"] = self.error
@@ -179,7 +181,7 @@ def build_prompt(
     lines.append("- 横轴 x = GC(%)，纵轴 y = 测序深度；灰→红密度图中越红代表点越多。")
     lines.append(f"- 蓝色水平虚线 = 低深度上限 low_depth_max={context['low_depth_max']:g}。")
     lines.append("- 橙色曲线 = 主云团主脊线（主物种基因组的深度趋势）。")
-    lines.append("- 绿色实线 = 当前污染带上边界线；绿色竖点线 = 污染 GC 起点 gc_start。")
+    lines.append("- 绿色实线 = 当前污染带上边界线（自 GC=20 画至 GC=95；gc_start 为污染带 GC 起点，d_left 是线在 GC=gc_start 处的深度锚点）。")
     if current is None:
         lines.append("- 注意：本图当前没有绿色边界线（算法第一遍未检出）。")
     lines.append("")
@@ -454,6 +456,29 @@ def review_and_adjust(
     return outcome
 
 
+def _summarize_rounds(rounds_log: list[dict]) -> list[dict]:
+    """从逐轮完整日志抽取精简摘要（不含 prompt/raw_response），用于内联进 gc_raw 供前端展示。"""
+    out: list[dict] = []
+    for r in rounds_log:
+        parsed = r.get("parsed") or {}
+        out.append(
+            {
+                "round": r.get("round"),
+                "action": parsed.get("action"),
+                "has_contamination": parsed.get("has_contamination"),
+                "reason": parsed.get("reason"),
+                "proposed": r.get("proposed"),
+                "clamped": r.get("clamped"),
+                "stats_after": r.get("stats_after"),
+                "retried_parse": r.get("retried_parse"),
+                "parse_error": r.get("parse_error"),
+                "error": r.get("error"),
+                "elapsed_sec": r.get("elapsed_sec"),
+            }
+        )
+    return out
+
+
 def _finalize_log(
     log_path: Path,
     pos_path: str | None,
@@ -464,6 +489,8 @@ def _finalize_log(
     outcome: LlmAdjustmentOutcome,
 ) -> str | None:
     total_elapsed = sum(float(r.get("elapsed_sec") or 0.0) for r in rounds_log)
+    # 所有退出路径都经过此处，rounds_detail 只在这里赋值一次
+    outcome.rounds_detail = _summarize_rounds(rounds_log)
     payload = {
         "schema_version": LOG_SCHEMA_VERSION,
         "model": GC_VL_MODEL_NAME,

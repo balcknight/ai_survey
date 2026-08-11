@@ -143,6 +143,17 @@ npm run dev -- --host 0.0.0.0 --port 5173
 - 筛选项变更即自动触发检索（无独立查询/重置按钮）
 - 点击行以抽屉形式打开详情看板（CaseBoard）
 
+### CaseBoard GC 演进展示
+- GC 复核卡片在有 `gc_raw.artifacts.png_steps` 时展示**判定演进过程**（算法第一遍 → LLM 逐轮调整 → 最终帧）：
+  - 左列为可点击的步骤列表（阶段 el-tag + 步骤标签 + `contam/total` ratio），默认选中最终帧；
+  - 右列为当前步骤大图（点击复用现有 `openPlotPreview` 弹层放大）与当前步骤信息卡
+    （阶段、`gc_start/d_left/d_right/slope/intercept`、ratio、LLM reason）；
+  - LLM reason 优先取 `gc_raw.llm_adjustment.rounds_detail[]` 中对应轮的 `reason`，无则回退步骤 `note`。
+- 图片 URL 在现有 `?t=`/`?token=` 基础上追加 `?step={index}`（后端 `GET /api/cases/{id}/gc-plot?step=N`）；
+  切换样本时步骤选择复位到最终帧。
+- 老数据（无 `png_steps`）回退为原有单图展示，URL 不带 `step`；GC 失败样本显示空态文案。
+- GC 复核卡片 kv 区新增 `participated` 字段（本次 GC 是否参与最终裁决）。
+
 ## 人工审核页设计（/review-prototype）
 
 ### 整体布局
@@ -154,7 +165,7 @@ npm run dev -- --host 0.0.0.0 --port 5173
 ### 审核单（右侧面板）结构
 自上而下：
 1. 自动结果摘要（`auto-result`）：当前审核人、自动 `final_level`、自动 `should_transfer`、审核生信（邮箱前缀）、`survey.remark`。
-2. AI 判定结果区（`ai-judge-panel`）：kmer / nt / gc 三栏，展示各自 AI 判定字段、详情入口（查看 detail/warnings/ntspe_detail）与「人工确认」单选（`correct|incorrect|uncertain`）。gc 未执行时显示“GC 不参与判定”占位。
+2. AI 判定结果区（`ai-judge-panel`）：kmer / nt / gc 三栏，展示各自 AI 判定字段、详情入口（查看 detail/warnings/ntspe_detail）与「人工确认」单选（`correct|incorrect|uncertain`）。GC 每次 survey 都会执行，但 gc 栏的人工确认单选仅在 `gc_result.participated=true`（kmer 无警告且 kmer/NT 不一致）时出现；未参与裁决时显示“GC 未参与裁决”占位（老数据 `participated` 为 null 时按 `executed` 回退）。
 3. 审核表单（`el-form`）：
    - **Kmer 判定不正确原因**（`kmer_incorrect_reason`，多行文本）——仅当「人工确认 kmer」为 `incorrect` 时显示，必填。
    - **审核备注**（`note`，多行文本）——作为邮件正文发送。
@@ -271,7 +282,7 @@ npm run dev -- --host 0.0.0.0 --port 5173
 - `GET /api/cases`（列表）
 - `GET /api/cases/stats`（统计概览）
 - `GET /api/cases/{case_id}`（详情）
-- `GET /api/cases/{case_id}/kmer-plot` / `gc-plot`（峰图/GC 图，`<img>` 用 `?token=`）
+- `GET /api/cases/{case_id}/kmer-plot` / `gc-plot`（峰图/GC 图，`<img>` 用 `?token=`；`gc-plot` 另支持 `?step=N` 取 GC 演进步骤快照图，不传为最终帧）
 - `GET /api/cases/{case_id}/judge-report`（判定报告）
 - `GET /api/cases/{case_id}/report-html`（HTML 报告，`<iframe>` 用 `?token=`）
 - `GET /api/cases/{case_id}/archive`（原始压缩包，`<a>` 用 `?token=`）

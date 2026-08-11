@@ -4,6 +4,7 @@ import { ElMessageBox } from 'element-plus'
 import { useCasesStore } from '../../stores/cases'
 import { formatCellValue, formatLongText } from '../../utils/format'
 import { getToken } from '../../utils/auth-token'
+import type { GcLlmRoundSummary, GcPngStep } from '../../types/case'
 
 const store = useCasesStore()
 
@@ -12,6 +13,7 @@ const showMetricsRemark = ref(false)
 const plotPreviewVisible = ref(false)
 const plotPreviewTitle = ref('')
 const plotPreviewUrl = ref('')
+const gcStepIndex = ref<number | null>(null)
 
 watch(
   () => store.selectedCaseId,
@@ -21,6 +23,7 @@ watch(
     plotPreviewVisible.value = false
     plotPreviewTitle.value = ''
     plotPreviewUrl.value = ''
+    gcStepIndex.value = null
   },
 )
 
@@ -72,6 +75,64 @@ const gcPlotEmptyText = computed(() => {
   if (gc.status === 'fail') return 'GC 判定失败，未产出可展示图像'
   return '暂无 GC 图'
 })
+
+// ---- GC 判定演进展示（步骤快照 + LLM 思考过程） ----
+const gcPngSteps = computed<GcPngStep[]>(() => {
+  const steps = gcArtifacts.value?.png_steps
+  return Array.isArray(steps) ? (steps as GcPngStep[]) : []
+})
+
+const gcHasSteps = computed(() => gcPngSteps.value.length > 0)
+
+// 默认展示最终帧；gcStepIndex 为 null 时同样指向最后一步
+const gcActiveStep = computed<GcPngStep | null>(() => {
+  if (!gcHasSteps.value) return null
+  return (
+    gcPngSteps.value.find((s) => s.index === gcStepIndex.value) ??
+    gcPngSteps.value[gcPngSteps.value.length - 1]
+  )
+})
+
+const gcActiveImageUrl = computed(() => {
+  const caseId = store.selectedCase?.id
+  const gc = store.selectedCase?.gc_result
+  const updatedAt = gc?.updated_at ?? store.selectedCase?.updated_at
+  if (!caseId) return ''
+  const pngPath = typeof gcArtifacts.value?.png === 'string' ? gcArtifacts.value.png : ''
+  const qs = new URLSearchParams({ t: String(updatedAt ?? '') })
+  if (gcHasSteps.value && gcActiveStep.value) {
+    // 演进快照按 step 取图（后端会校验路径在受管目录内）
+    qs.set('step', String(gcActiveStep.value.index))
+  } else if (!pngPath) {
+    return '' // 老数据无图可取
+  }
+  // <img> 无法携带 Authorization 头，改用 ?token= 查询参数鉴权。
+  const token = getToken()
+  if (token) qs.set('token', token)
+  return `${apiBase}/api/cases/${caseId}/gc-plot?${qs.toString()}`
+})
+
+const gcActiveRoundDetail = computed<GcLlmRoundSummary | null>(() => {
+  const step = gcActiveStep.value
+  if (!step || step.stage !== 'llm_round' || step.round == null) return null
+  const gcRaw = store.selectedCase?.gc_result?.gc_raw as Record<string, unknown> | null | undefined
+  const llm = (gcRaw?.llm_adjustment ?? {}) as Record<string, unknown>
+  const rounds = (llm.rounds_detail ?? []) as GcLlmRoundSummary[]
+  return rounds.find((r) => r.round === step.round) ?? null
+})
+
+function gcStageText(stage?: string | null): string {
+  if (stage === 'algo') return '算法第一遍'
+  if (stage === 'llm_round') return 'LLM调整'
+  if (stage === 'final') return '最终'
+  return stage || '-'
+}
+
+function gcStageTagType(stage?: string | null): 'info' | 'warning' | 'success' {
+  if (stage === 'llm_round') return 'warning'
+  if (stage === 'final') return 'success'
+  return 'info'
+}
 
 const apiBase = import.meta.env.VITE_API_BASE_URL ?? 'http://10.11.0.6:8001'
 
@@ -218,13 +279,58 @@ async function onDelete() {
             <div><b>executed:</b> {{ formatCellValue(store.selectedCase?.gc_result?.executed) }}</div>
             <div><b>status:</b> {{ formatCellValue(store.selectedCase?.gc_result?.status) }}</div>
             <div><b>heavy_contamination:</b> {{ formatCellValue(store.selectedCase?.gc_result?.heavy_contamination) }}</div>
+            <div><b>participated:</b> {{ formatCellValue(store.selectedCase?.gc_result?.participated) }}</div>
             <div><b>pos_path:</b> {{ formatCellValue(store.selectedCase?.gc_result?.pos_path) }}</div>
             <div class="span-2"><b>reason:</b> {{ formatLongText(store.selectedCase?.gc_result?.reason) }}</div>
             <div class="span-2"><b>gc_raw.decision:</b> {{ formatLongText(gcDecision) }}</div>
             <div class="span-2"><b>gc_raw.global_stats:</b> {{ formatLongText(gcGlobalStats) }}</div>
-            <div class="span-2"><b>gc_raw.artifacts:</b> {{ formatLongText(gcArtifacts) }}</div>
           </div>
-          <div class="gc-plot-grid">
+          <!-- 新数据：GC 判定演进（步骤快照 + LLM 思考） -->
+          <div v-if="gcHasSteps" class="gc-evolution">
+            <div class="gc-evolution__steps">
+              <div
+                v-for="s in gcPngSteps"
+                :key="s.index"
+                class="gc-step-item"
+                :class="{ 'gc-step-item--active': gcActiveStep?.index === s.index }"
+                @click="gcStepIndex = s.index"
+              >
+                <el-tag size="small" :type="gcStageTagType(s.stage)">{{ gcStageText(s.stage) }}</el-tag>
+                <div class="gc-step-item__label">{{ s.label }}</div>
+                <div v-if="s.contam_over_total_ratio != null" class="gc-step-item__ratio">
+                  ratio={{ Number(s.contam_over_total_ratio).toFixed(4) }}
+                </div>
+              </div>
+            </div>
+            <div class="gc-evolution__main">
+              <img
+                :src="gcActiveImageUrl"
+                alt="gc-plot-step"
+                class="kmer-plot-image"
+                @click="openPlotPreview('GC', gcActiveImageUrl)"
+              />
+              <el-card shadow="never" class="gc-step-info">
+                <template #header>当前步骤：{{ gcActiveStep?.label }}</template>
+                <div class="kv-grid">
+                  <div><b>阶段:</b> {{ gcStageText(gcActiveStep?.stage) }}</div>
+                  <div><b>contam/total:</b> {{ formatCellValue(gcActiveStep?.contam_over_total_ratio) }}</div>
+                  <div><b>gc_start:</b> {{ formatCellValue(gcActiveStep?.line?.gc_start) }}</div>
+                  <div>
+                    <b>d_left / d_right:</b>
+                    {{ formatCellValue(gcActiveStep?.line?.d_left) }} / {{ formatCellValue(gcActiveStep?.line?.d_right) }}
+                  </div>
+                  <div><b>slope:</b> {{ formatCellValue(gcActiveStep?.line?.slope) }}</div>
+                  <div><b>intercept:</b> {{ formatCellValue(gcActiveStep?.line?.intercept) }}</div>
+                  <div class="span-2">
+                    <b>LLM reason:</b>
+                    {{ formatLongText(gcActiveRoundDetail?.reason ?? gcActiveStep?.note ?? null) }}
+                  </div>
+                </div>
+              </el-card>
+            </div>
+          </div>
+          <!-- 老数据回退：单图展示 -->
+          <div v-else class="gc-plot-grid">
             <el-card shadow="never">
               <template #header>GC 图</template>
               <el-empty v-if="!gcPlotUrl" :description="gcPlotEmptyText" :image-size="80" />
@@ -386,6 +492,60 @@ async function onDelete() {
   gap: 12px;
 }
 
+.gc-evolution {
+  margin-top: 12px;
+  display: grid;
+  grid-template-columns: 230px minmax(0, 1fr);
+  gap: 12px;
+  align-items: start;
+}
+
+.gc-evolution__steps {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.gc-step-item {
+  border: 1px solid #e3e8ef;
+  border-radius: 6px;
+  padding: 8px 10px;
+  cursor: pointer;
+  background: #fff;
+  transition: border-color 0.15s ease, background 0.15s ease;
+}
+
+.gc-step-item:hover {
+  border-color: #b3c1d1;
+}
+
+.gc-step-item--active {
+  border-color: #409eff;
+  background: #ecf5ff;
+}
+
+.gc-step-item__label {
+  margin-top: 6px;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.gc-step-item__ratio {
+  margin-top: 2px;
+  font-size: 12px;
+  color: #6a7a8a;
+}
+
+.gc-evolution__main {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.gc-step-info {
+  border: 0;
+}
+
 .kmer-plot-image {
   width: 100%;
   height: auto;
@@ -415,6 +575,10 @@ async function onDelete() {
   }
 
   .gc-plot-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .gc-evolution {
     grid-template-columns: 1fr;
   }
 }

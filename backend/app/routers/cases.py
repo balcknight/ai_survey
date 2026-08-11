@@ -16,7 +16,7 @@ from .. import crud, models, schemas
 from ..db import get_db
 from ..deps import get_current_user
 from ..json_utils import from_json_text
-from ..services.gc_plot import GC_PLOT_ROOT, cleanup_gc_outputs
+from ..services.gc_plot import GC_PLOT_ROOT, cleanup_gc_outputs, collect_gc_cleanup_paths
 from ..services.kmer_plot import KMER_PLOT_ROOT, cleanup_kmer_plots, generate_kmer_plots
 from ..services.mailer import send_survey_done_email
 from ..services.survey_runner import (
@@ -154,6 +154,7 @@ def _to_gc_input(gc_result: dict) -> schemas.GcResultIn:
         reason=gc_result.get("reason"),
         pos_path=gc_result.get("pos_path"),
         heavy_contamination=gc_result.get("heavy_contamination"),
+        participated=gc_result.get("participated"),
         gc_raw=gc_result.get("gc_raw"),
         raw_payload=gc_result,
     )
@@ -273,7 +274,7 @@ def _ensure_gc_plot_artifacts(merged: dict, file_check: schemas.FileCheckOut, sa
         if not isinstance(gc_raw_plot, dict):
             raise ValueError("GC绘图返回格式异常")
         if not gc_result:
-            gc_result = {"executed": False, "status": "skipped", "reason": "仅补充GC图展示，未参与裁决"}
+            gc_result = {"executed": False, "status": "skipped", "reason": "仅补充GC图展示，未参与裁决", "participated": False}
         gc_result["pos_path"] = gc_result.get("pos_path") or pos_path
         gc_result["gc_raw"] = gc_raw_plot
     except Exception as exc:
@@ -426,7 +427,11 @@ def get_kmer_plot(
 
 
 @router.get("/{case_id}/gc-plot")
-def get_gc_plot(case_id: int, db: Session = Depends(get_db)):
+def get_gc_plot(
+    case_id: int,
+    step: int | None = Query(None, ge=0),
+    db: Session = Depends(get_db),
+):
     obj = crud.get_case_detail(db, case_id)
     if obj is None:
         raise HTTPException(status_code=404, detail="样本不存在")
@@ -435,9 +440,22 @@ def get_gc_plot(case_id: int, db: Session = Depends(get_db)):
 
     gc_raw = from_json_text(obj.gc_result.gc_raw_json, None)
     artifacts = gc_raw.get("artifacts") if isinstance(gc_raw, dict) else None
-    plot_path = artifacts.get("png") if isinstance(artifacts, dict) else None
-    if not isinstance(plot_path, str) or not plot_path.strip():
-        raise HTTPException(status_code=404, detail="该样本暂无GC图")
+    if step is None:
+        plot_path = artifacts.get("png") if isinstance(artifacts, dict) else None
+        if not isinstance(plot_path, str) or not plot_path.strip():
+            raise HTTPException(status_code=404, detail="该样本暂无GC图")
+    else:
+        png_steps = artifacts.get("png_steps") if isinstance(artifacts, dict) else None
+        matched = next(
+            (s for s in (png_steps or []) if isinstance(s, dict) and s.get("index") == step),
+            None,
+        )
+        plot_path = matched.get("png") if isinstance(matched, dict) else None
+        if not isinstance(plot_path, str) or not plot_path.strip():
+            raise HTTPException(
+                status_code=404,
+                detail="该样本GC图无此步骤（step 越界或历史数据无步骤快照）",
+            )
 
     path = Path(plot_path).expanduser().resolve()
     if not path.exists() or not path.is_file():
@@ -995,18 +1013,14 @@ def delete_case(case_id: int, db: Session = Depends(get_db)):
     if existing is None:
         raise HTTPException(status_code=404, detail="样本不存在")
 
-    gc_artifacts = from_json_text(existing.gc_result.gc_raw_json, None) if existing.gc_result else None
-    gc_artifacts = gc_artifacts.get("artifacts") if isinstance(gc_artifacts, dict) else None
-    gc_plot_path = gc_artifacts.get("png") if isinstance(gc_artifacts, dict) else None
-    gc_json_path = gc_artifacts.get("json") if isinstance(gc_artifacts, dict) else None
-
+    gc_raw = from_json_text(existing.gc_result.gc_raw_json, None) if existing.gc_result else None
+    gc_cleanup_result = cleanup_gc_outputs(collect_gc_cleanup_paths(gc_raw))
     kmer_cleanup_result = cleanup_kmer_plots(
         [
             existing.kmer_result.spe_plot_path if existing.kmer_result else None,
             existing.kmer_result.num_plot_path if existing.kmer_result else None,
         ]
     )
-    gc_cleanup_result = cleanup_gc_outputs([gc_plot_path, gc_json_path])
     crud.delete_case(db, case_id)
 
     deleted_files = int(kmer_cleanup_result.get("deleted_files", 0)) + int(gc_cleanup_result.get("deleted_files", 0))

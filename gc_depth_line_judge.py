@@ -4,15 +4,17 @@ GC-Depth 线性分割判定脚本（端点参数化 + LLM 视觉复核）
 
 输入: .pos 文件（第3列GC，第4列Depth）
 输出:
-1) JSON 结果（线参数、计数、比值、判定、LLM 复核摘要）
+1) JSON 结果（线参数、计数、比值、判定、LLM 复核摘要、演进步骤 png_steps）
 2) PNG 可视化（密度图 + 污染带上边界线）
-3) LLM 复核调试日志 <stem>.gc_line.llm_log.json（仅 LLM 实际运行时）
+3) 演进步骤快照 <stem>.gc_line.step{N}.png（每次渲染各保留一张，终帧仍为 <stem>.gc_line.png）
+4) LLM 复核调试日志 <stem>.gc_line.llm_log.json（仅 LLM 实际运行时）
 
 第一遍（确定性算法）:
 - 估计主脊线；在“主脊线显著高于蓝虚线”的 GC 区间内寻找低深度富集 run，得到 gc_start；
 - 端点参数化网格搜索边界线：dL/dR ∈ [depth_floor, low_depth_max]、dL<=dR，
   取满足覆盖率(区域低深度点中位于线下的比例)>=min_coverage 的最低线。
-- 判定口径不变: 污染点 = gc>=gc_start 且 depth<=low_depth_max 且 depth<=线值；
+- 判定口径: 污染点 = depth<=low_depth_max 且 depth<=线值（全 GC 区间，
+  不再限制 gc>=gc_start；gc_start 仅作污染带存在性门控、拟合区域与线锚点）；
   contam_over_total_ratio > heavy_threshold(0.07) 判重度污染。
 
 第二遍（可选，默认开启）: 多模态 VL 模型看图复核/调参，见 gc_llm_adjust.py。
@@ -23,6 +25,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import shutil
 import sys
 from dataclasses import asdict, dataclass
 from pathlib import Path
@@ -33,6 +36,7 @@ import numpy as np
 import pandas as pd
 
 G1_GC = 95.0  # 边界线评估区间右端点
+GC_PLOT_MIN = 20.0  # 边界线绘图/统计左端点（全 GC 区间，无左边界限制）
 
 
 @dataclass
@@ -364,13 +368,17 @@ def compute_global_stats(
     line_eps: float,
     low_depth_max: float,
 ) -> dict:
-    """按右下污染区统计点数与占比（判定口径不变）。"""
+    """按污染边界线统计点数与占比。
+
+    口径：污染点 = depth<=low_depth_max 且 depth<=线值（全 GC 区间，
+    不限制 gc>=gc_start）。gc_start 仅用于输出 contam_gc_start 与
+    low_depth_region_count（后者保持“污染带区域内”诊断口径）。
+    """
     line_depth = slope * gc + intercept
     boundary = np.minimum(line_depth, low_depth_max)
     boundary = np.maximum(boundary, 0.0)
     residual = depth - boundary
-    region_mask = gc >= gc_start
-    contamination_mask = region_mask & (depth <= low_depth_max) & (residual <= 0)
+    contamination_mask = (depth <= low_depth_max) & (residual <= 0)
 
     below = int(contamination_mask.sum())
     total = int(gc.size)
@@ -378,9 +386,9 @@ def compute_global_stats(
     ratio = float(below / max(total, 1))
     below_over_on = float(below / max(on, 1))
 
-    on_band = int((region_mask & (np.abs(residual) <= line_eps) & (depth <= low_depth_max)).sum())
-    below_band = int((region_mask & (residual < -line_eps) & (depth <= low_depth_max)).sum())
-    above_band = int((region_mask & (residual > line_eps) & (depth <= low_depth_max)).sum())
+    on_band = int(((np.abs(residual) <= line_eps) & (depth <= low_depth_max)).sum())
+    below_band = int(((residual < -line_eps) & (depth <= low_depth_max)).sum())
+    above_band = int(((residual > line_eps) & (depth <= low_depth_max)).sum())
     return {
         "line_below_count": below,
         "line_on_count": on,
@@ -395,14 +403,13 @@ def compute_global_stats(
 
 
 def _draw_line(ax, line: LineCandidate, low_depth_max: float, line_eps: float, *, color: str, style: str, label: str) -> None:
-    xs = np.linspace(line.gc_start, G1_GC, 240)
+    xs = np.linspace(GC_PLOT_MIN, G1_GC, 240)
     ys = np.minimum(line.slope * xs + line.intercept, low_depth_max)
     ys = np.maximum(ys, 0.0)
     ax.plot(xs, ys, color=color, linestyle=style, linewidth=2.0, label=label)
     if style == "-":
         ax.plot(xs, np.minimum(ys + line_eps, low_depth_max), color=color, linewidth=1.0, alpha=0.6)
         ax.plot(xs, np.maximum(ys - line_eps, 0.0), color=color, linewidth=1.0, alpha=0.6, label=f"boundary band (+/-{line_eps:g})")
-        ax.axvline(line.gc_start, color=color, linestyle=":", linewidth=1.2, alpha=0.9, label=f"contam GC start {line.gc_start:.1f}")
 
 
 def plot_gc_depth(
@@ -539,6 +546,13 @@ def run_gc_depth_line(
         else default_out_dir / f"{pos_path.stem}.gc_line.png"
     )
 
+    # 清理上次运行残留的演进步骤快照（LLM 轮数不确定，重跑可能残留孤儿文件）
+    try:
+        for old_step in out_png_path.parent.glob(f"{out_png_path.stem}.step*.png"):
+            old_step.unlink()
+    except OSError:
+        pass
+
     gc, depth = load_gc_depth(pos_path)
     if gc.size == 0:
         raise ValueError("输入数据为空或清洗后无有效点")
@@ -586,7 +600,59 @@ def run_gc_depth_line(
             prev_line=prev,
         )
 
+    # ---- 演进步骤快照：每次渲染各保留一张 PNG，便于观察判定演进过程 ----
+    png_steps: list[dict] = []
+
+    def _line_payload(line_obj: LineCandidate | None) -> dict | None:
+        if line_obj is None or not line_obj.exists:
+            return None
+        return {
+            "gc_start": line_obj.gc_start,
+            "d_left": line_obj.d_left,
+            "d_right": line_obj.d_right,
+            "slope": line_obj.slope,
+            "intercept": line_obj.intercept,
+        }
+
+    def _record_step(
+        line_obj: LineCandidate | None,
+        *,
+        stage: str,
+        label: str,
+        note: str | None = None,
+        ratio: float | None = None,
+        round_idx: int | None = None,
+    ) -> None:
+        idx = len(png_steps)
+        try:
+            if stage == "final":
+                step_png = str(out_png_path)  # 终帧即 out_png，向后兼容 artifacts.png
+            else:
+                step_png = str(out_png_path.parent / f"{out_png_path.stem}.step{idx}.png")
+                shutil.copyfile(out_png_path, step_png)
+        except OSError:
+            return  # 快照失败降级：丢弃该步骤，不影响判定主流程
+        png_steps.append(
+            {
+                "index": idx,
+                "stage": stage,
+                "label": label,
+                "note": note,
+                "png": step_png,
+                "round": round_idx,
+                "line": _line_payload(line_obj),
+                "contam_over_total_ratio": ratio,
+            }
+        )
+
     render(algo_line)
+    _record_step(
+        algo_line,
+        stage="algo",
+        label="算法第一遍边界线" if algo_line.exists else "算法第一遍（未检出边界线）",
+        note="确定性算法第一遍拟合结果",
+        ratio=stats["contam_over_total_ratio"] if stats else None,
+    )
 
     # ---- 第二遍：LLM 视觉复核（默认开启，任何异常降级为第一遍结果） ----
     llm_summary: dict
@@ -613,12 +679,24 @@ def run_gc_depth_line(
             )
             log_path = out_json_path.parent / (out_json_path.stem + ".llm_log.json")
 
+            llm_render_count = 0
+
             def llm_render(params: dict) -> None:
+                nonlocal llm_render_count
+                llm_render_count += 1  # review_and_adjust 中非 adjust 轮立即 break，render 序号恒等于轮次号
                 line_obj = LineCandidate(
                     True, params["gc_start"], None, params["d_left"], params["d_right"],
                     params["slope"], params["intercept"], None, 0, low_depth_points,
                 )
-                render(line_obj, suffix=" | LLM adjusting")
+                render(line_obj, suffix=f" | LLM round {llm_render_count} adjusting")
+                step_stats = compute_stats(params["gc_start"], params["slope"], params["intercept"])
+                _record_step(
+                    line_obj,
+                    stage="llm_round",
+                    label=f"LLM 第{llm_render_count}轮调整",
+                    ratio=step_stats["contam_over_total_ratio"],
+                    round_idx=llm_render_count,
+                )
 
             outcome = gc_llm_adjust.review_and_adjust(
                 algo_params=algo_params,
@@ -664,6 +742,18 @@ def run_gc_depth_line(
     heavy = bool(final_stats["contam_over_total_ratio"] > heavy_threshold) if final_stats else False
     adjusted = llm_summary.get("final_action") in {"adjust", "no_contamination"} and llm_summary.get("status", "").startswith("ok")
     render(final_line, prev=algo_line if (adjusted and algo_line.exists and final_line.exists) else None)
+    _record_step(
+        final_line,
+        stage="final",
+        label="最终结果",
+        note=f"final_action={llm_summary.get('final_action')}",
+        ratio=final_stats["contam_over_total_ratio"] if final_stats else None,
+    )
+
+    # LLM 轮次摘要 ↔ 演进步骤互链（rounds_detail 由 gc_llm_adjust 填充）
+    step_by_round = {s["round"]: s["index"] for s in png_steps if s.get("stage") == "llm_round"}
+    for round_detail in llm_summary.get("rounds_detail") or []:
+        round_detail["png_step_index"] = step_by_round.get(round_detail.get("round"))
 
     # ---- 判定理由 ----
     if final_line.exists and final_stats is not None:
@@ -715,6 +805,7 @@ def run_gc_depth_line(
         "artifacts": {
             "json": str(out_json_path),
             "png": str(out_png_path),
+            "png_steps": png_steps,
         },
     }
 
@@ -750,6 +841,7 @@ def main_cli() -> None:
 def _print_summary(result: dict) -> None:
     print(f"[OK] JSON: {result['artifacts']['json']}")
     print(f"[OK] PNG : {result['artifacts']['png']}")
+    print(f"[STEPS] png_steps={len(result['artifacts'].get('png_steps') or [])}")
     fit = result.get("fit", {})
     stats = result.get("global_stats")
     if fit.get("exists"):

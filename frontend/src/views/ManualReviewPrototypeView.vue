@@ -22,6 +22,13 @@ const currentReviewerName = computed(() => {
   return user.display_name || user.username
 })
 
+// GC 现在每次 survey 都执行，但仅在 kmer/NT 不一致且无 kmer 警告时参与裁决。
+// 老数据 participated 为 null 时回退 executed，保持与旧版一致的勾选条件。
+const gcParticipated = computed(() => {
+  const gc = store.selectedCase?.gc_result
+  return gc?.participated ?? gc?.executed ?? false
+})
+
 const reviewForm = reactive({
   kmer: 'correct' as ReviewChoice,
   nt: 'correct' as ReviewChoice,
@@ -525,10 +532,11 @@ watch(
                 <div class="ai-judge-item__title">gc</div>
                 <div class="ai-judge-fields">
                   <div><b>gc.executed:</b> {{ yesNoText(store.selectedCase.gc_result?.executed) }}</div>
+                  <div><b>gc.participated:</b> {{ yesNoText(store.selectedCase.gc_result?.participated ?? store.selectedCase.gc_result?.executed ?? null) }}</div>
                   <div><b>gc.heavy_contamination:</b> {{ yesNoText(store.selectedCase.gc_result?.heavy_contamination) }}</div>
                 </div>
                 <div class="ai-judge-links" />
-                <div v-if="store.selectedCase.gc_result?.executed" class="card-review-row">
+                <div v-if="gcParticipated" class="card-review-row">
                   <span class="review-ai-hint">人工确认</span>
                   <el-radio-group v-model="reviewForm.gc" size="small">
                     <el-radio-button v-for="item in reviewChoiceOptions" :key="`g-${item.value}`" :value="item.value">
@@ -538,7 +546,7 @@ watch(
                 </div>
                 <div v-else class="card-review-row card-review-row--muted">
                   <span class="review-ai-hint">人工确认</span>
-                  <span class="review-skip-text">kmer、NT 结论一致，GC 不参与判定</span>
+                  <span class="review-skip-text">GC 未参与裁决（kmer/NT 一致、存在 kmer 警告或未执行）</span>
                 </div>
               </div>
             </div>

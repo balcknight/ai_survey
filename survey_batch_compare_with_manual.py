@@ -123,6 +123,7 @@ def run_one(sample_path: str, verbose: bool = False) -> dict[str, Any]:
         "pollution_threshold_percent": nt.get("pollution_threshold_percent", ""),
         "gc_status": gc.get("status", ""),
         "gc_reason": gc.get("reason", ""),
+        "gc_participated": gc.get("participated"),
     }
 
 
@@ -191,6 +192,7 @@ def main() -> None:
                     "NT阈值(%)": script_res["pollution_threshold_percent"],
                     "GC状态": script_res["gc_status"],
                     "GC原因": script_res["gc_reason"],
+                    "GC参与裁决": "是" if script_res["gc_participated"] else "否",
                 }
             )
             record["一致"] = (
@@ -213,6 +215,7 @@ def main() -> None:
                     "NT阈值(%)": "",
                     "GC状态": "",
                     "GC原因": "",
+                    "GC参与裁决": "",
                     "错误": str(exc),
                     "一致": MANUAL_NO,
                 }

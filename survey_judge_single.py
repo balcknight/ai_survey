@@ -446,27 +446,24 @@ def run_single_survey(
         print(f"  污染细节: {nt_result.get('ntspe_detail')}")
         print('=' * 60)
 
-    gc_result: dict[str, Any] = {
-        'executed': False,
-        'status': 'skipped',
-        'reason': 'kmer与NT判定一致，未触发GC复核',
-    }
-    if _has_kmer_warnings(result):
-        gc_result = {
-            'executed': False,
-            'status': 'skipped',
-            'reason': 'kmer存在警告信息，按规则直接转人工，跳过GC复核',
-        }
-    elif _is_kmer_nt_conflict(result, nt_result):
-        if verbose:
-            print('=' * 60)
-            print('检测到 kmer 与 NT 判定不一致，触发 GC 复核裁决。')
-            print('=' * 60)
-        gc_result = _run_gc_check(sample_dir)
+    # GC 复核每次 survey 无条件执行（产出图像/数据供展示与追溯）；
+    # 仅当 kmer 无警告且 kmer/NT 判定不一致时参与最终裁决（participated=True），
+    # 判定规则不变（build_final_survey 仅在冲突分支消费 gc_result）。
+    participated = (not _has_kmer_warnings(result)) and _is_kmer_nt_conflict(result, nt_result)
+    if verbose:
+        print('=' * 60)
+        if participated:
+            print('检测到 kmer 与 NT 判定不一致，GC 复核参与本次裁决。')
+        else:
+            print('GC 复核照常执行（本次不参与裁决，仅产出图像/数据）。')
+        print('=' * 60)
+    gc_result = _run_gc_check(sample_dir)
+    gc_result['participated'] = participated
     if verbose:
         print('=' * 60)
         print('GC复核说明:')
         print(f"  executed={gc_result.get('executed')}, status={gc_result.get('status')}")
+        print(f"  participated={participated}")
         print(f"  reason={gc_result.get('reason')}")
         if gc_result.get('status') == 'ok':
             decision = (gc_result.get('gc_raw') or {}).get('decision') or {}
@@ -534,7 +531,7 @@ def main():
         )
     print(
         f"GC复核: executed={gc.get('executed')}, status={gc.get('status')}, "
-        f"reason={gc.get('reason')}"
+        f"participated={gc.get('participated')}, reason={gc.get('reason')}"
     )
     print(f"综合判定: {survey.get('final_level')}, 是否流转: {survey.get('should_transfer')}")
 

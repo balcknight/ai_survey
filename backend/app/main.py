@@ -44,6 +44,7 @@ def init_db():
     Base.metadata.create_all(bind=engine)
     _ensure_case_columns()
     _ensure_manual_review_columns()
+    _ensure_gc_result_columns()
     ensure_default_admin()
 
 
@@ -81,6 +82,19 @@ def _ensure_manual_review_columns() -> None:
             conn.execute(text("ALTER TABLE manual_reviews ADD COLUMN kmer_incorrect_reason TEXT"))
         conn.execute(
             text("CREATE INDEX IF NOT EXISTS ix_manual_reviews_reviewer_id ON manual_reviews(reviewer_id)")
+        )
+
+
+def _ensure_gc_result_columns() -> None:
+    # 老库补 participated 列（GC 是否参与最终裁决；SQLite 无该列时为 NULL）。
+    # 注意：SQLite 的 ALTER TABLE ADD COLUMN 不支持附带约束，老库中该列为普通可空 BOOLEAN。
+    with engine.begin() as conn:
+        rows = conn.execute(text("PRAGMA table_info(gc_results)")).fetchall()
+        existing = {str(r[1]) for r in rows}
+        if "participated" not in existing:
+            conn.execute(text("ALTER TABLE gc_results ADD COLUMN participated BOOLEAN"))
+        conn.execute(
+            text("CREATE INDEX IF NOT EXISTS ix_gc_results_participated ON gc_results(participated)")
         )
 
 
