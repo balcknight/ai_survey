@@ -211,6 +211,7 @@ def _ploidy_multiplier(pattern: str) -> int | None:
         '二倍体': 1,
         '三倍体': 3,
         '四倍体': 4,
+        '六倍体': 6,
     }
     return mapping.get(pattern)
 

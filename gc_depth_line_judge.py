@@ -1,11 +1,22 @@
 #!/usr/bin/env python3
 """
-GC-Depth 线性分割判定脚本
+GC-Depth 线性分割判定脚本（端点参数化 + LLM 视觉复核）
 
 输入: .pos 文件（第3列GC，第4列Depth）
 输出:
-1) JSON 结果（线参数、计数、比值、判定）
-2) PNG 可视化（密度图 + 候选直线）
+1) JSON 结果（线参数、计数、比值、判定、LLM 复核摘要）
+2) PNG 可视化（密度图 + 污染带上边界线）
+3) LLM 复核调试日志 <stem>.gc_line.llm_log.json（仅 LLM 实际运行时）
+
+第一遍（确定性算法）:
+- 估计主脊线；在“主脊线显著高于蓝虚线”的 GC 区间内寻找低深度富集 run，得到 gc_start；
+- 端点参数化网格搜索边界线：dL/dR ∈ [depth_floor, low_depth_max]、dL<=dR，
+  取满足覆盖率(区域低深度点中位于线下的比例)>=min_coverage 的最低线。
+- 判定口径不变: 污染点 = gc>=gc_start 且 depth<=low_depth_max 且 depth<=线值；
+  contam_over_total_ratio > heavy_threshold(0.07) 判重度污染。
+
+第二遍（可选，默认开启）: 多模态 VL 模型看图复核/调参，见 gc_llm_adjust.py。
+LLM 不可用或输出非法时自动降级为第一遍结果。
 """
 
 from __future__ import annotations
@@ -21,16 +32,7 @@ from matplotlib.colors import LinearSegmentedColormap
 import numpy as np
 import pandas as pd
 
-
-@dataclass
-class FitResult:
-    exists: bool
-    slope: float | None
-    intercept: float | None
-    separation: float | None
-    balance: float | None
-    score: float | None
-    low_depth_points: int
+G1_GC = 95.0  # 边界线评估区间右端点
 
 
 @dataclass
@@ -41,6 +43,20 @@ class RidgeResult:
     peak_gc: float | None
     peak_depth: float | None
     points_used: int
+
+
+@dataclass
+class LineCandidate:
+    exists: bool
+    gc_start: float | None
+    gc_end: float | None
+    d_left: float | None
+    d_right: float | None
+    slope: float | None
+    intercept: float | None
+    coverage: float | None
+    low_points_in_region: int
+    low_depth_points: int
 
 
 def _find_in_sample_dir(sample_path: Path, pattern: str) -> Path | None:
@@ -99,16 +115,6 @@ def load_gc_depth(
     keep &= depth >= depth_min
 
     return gc[keep], depth[keep]
-
-
-def quantize_points(x: np.ndarray, y: np.ndarray, gc_grid: float, depth_grid: float) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-    """将点云量化为网格并合并重复点，返回 (xq, yq, weight)。"""
-    xq = np.round(x / gc_grid) * gc_grid
-    yq = np.round(y / depth_grid) * depth_grid
-
-    arr = np.column_stack([xq, yq])
-    uniq, counts = np.unique(arr, axis=0, return_counts=True)
-    return uniq[:, 0], uniq[:, 1], counts.astype(float)
 
 
 def estimate_main_ridge(
@@ -197,110 +203,156 @@ def estimate_main_ridge(
     )
 
 
-def find_contamination_region(
+def detect_gc_start(
     gc: np.ndarray,
     depth: np.ndarray,
     ridge: RidgeResult,
     ridge_profile: dict[str, np.ndarray],
-    low_depth_max: float = 10.0,
-    side_eps: float = 0.4,
+    *,
+    low_depth_max: float = 12.0,
     gc_grid: float = 0.5,
-) -> FitResult:
-    """根据主脊线峰值右侧的低深度富集区，拟合污染区上边界直线。"""
+    min_low_points: int = 100,
+    ridge_margin: float = 5.0,
+    rise_delta: float = 0.15,
+    abs_threshold: float = 0.15,
+    min_run_bins: int = 3,
+) -> tuple[tuple[float, float] | None, int]:
+    """污染带上边界 GC 起点检测。
+
+    思路：污染表现为主脊线右侧 low_ratio 陡升。
+    - 先用“高脊掩码”排除主云低/高 GC 尾（那里主脊沉入低深度区，低深度点属于主物种）；
+    - 在高脊内找 low_ratio 谷底 → 视为主云中心 valley_gc；
+    - 阈值 = max(valley_ratio + rise_delta, abs_threshold)；
+    - 从 valley_gc 向右首次进入阈值的连续 run 起点作为 gc_start，向右扩展到 run 尾（右端加半阈值容差）。
+    """
     low_mask = depth <= low_depth_max
     low_depth_points = int(low_mask.sum())
-    if (not ridge.exists) or low_depth_points < 100:
-        return FitResult(False, None, None, None, None, None, low_depth_points)
+    if (not ridge.exists) or low_depth_points < min_low_points:
+        return None, low_depth_points
 
     gc_centers = ridge_profile["gc_centers"]
     counts = ridge_profile["counts"]
     low_counts = ridge_profile["low_counts"]
     low_ratios = ridge_profile["low_ratios"]
+    ridge_depths = ridge_profile["ridge_depths"]
 
-    peak_gc = ridge.peak_gc if ridge.peak_gc is not None else 40.0
-    right_mask = gc_centers >= (peak_gc + 3.0)
-    baseline_mask = (gc_centers >= max(20.0, peak_gc - 12.0)) & (gc_centers <= peak_gc)
-    baseline = float(np.median(low_ratios[baseline_mask])) if np.any(baseline_mask) else 0.0
-    threshold = max(0.015, baseline * 2.5)
+    high_ridge = np.isfinite(ridge_depths) & (ridge_depths >= low_depth_max + ridge_margin)
+    valid_bin = high_ridge & (counts >= 40)
+    valid_idx = np.where(valid_bin)[0]
+    if valid_idx.size < min_run_bins:
+        return None, low_depth_points
 
-    candidate_mask = right_mask & (counts >= 40) & (low_counts >= 20) & (low_ratios >= threshold)
-    candidate_idx = np.where(candidate_mask)[0]
-    if candidate_idx.size == 0:
-        strongest_mask = right_mask & (counts >= 40) & (low_counts >= 20)
-        strongest_idx = np.where(strongest_mask)[0]
-        if strongest_idx.size == 0:
-            return FitResult(False, None, None, None, None, None, low_depth_points)
-        best_idx = strongest_idx[int(np.argmax(low_ratios[strongest_idx]))]
-        if low_ratios[best_idx] < max(threshold, 0.02):
-            return FitResult(False, None, None, None, None, None, low_depth_points)
-        candidate_idx = np.array([best_idx], dtype=int)
+    # 主云中心：high_ridge 内 low_ratio 谷底
+    valley_pos = int(np.argmin(low_ratios[valid_idx]))
+    valley_i = int(valid_idx[valley_pos])
+    valley_ratio = float(low_ratios[valley_i])
 
-    best_run: np.ndarray | None = None
-    runs: list[np.ndarray] = []
-    start = candidate_idx[0]
-    prev = candidate_idx[0]
-    for idx in candidate_idx[1:]:
-        if idx == prev + 1:
-            prev = idx
-            continue
-        runs.append(np.arange(start, prev + 1))
-        start = idx
-        prev = idx
-    runs.append(np.arange(start, prev + 1))
-    if runs:
-        best_run = max(runs, key=lambda arr: (arr.size, float(low_counts[arr].sum()), float(low_ratios[arr].mean())))
-    if best_run is None or best_run.size == 0:
-        return FitResult(False, None, None, None, None, None, low_depth_points)
+    threshold = max(valley_ratio + rise_delta, abs_threshold)
+    half = threshold * 0.5
 
-    run_low = float(gc_centers[best_run[0]])
-    run_high = float(gc_centers[best_run[-1]])
-    ridge_profile["contam_gc_start"] = run_low
-    ridge_profile["contam_gc_end"] = run_high
+    # 从 valley 向右找连续 low_ratio >= threshold 的 run
+    right_valid = valid_idx[valid_idx > valley_i]
+    if right_valid.size == 0:
+        return None, low_depth_points
+
+    hit_mask = (low_ratios >= threshold) & valid_bin & (low_counts >= 20)
+    hit_right = right_valid[hit_mask[right_valid]]
+    if hit_right.size < min_run_bins:
+        return None, low_depth_points
+
+    # 取最靠左的一段连续 run
+    diffs = np.diff(hit_right)
+    breaks = np.where(diffs != 1)[0]
+    if breaks.size == 0:
+        run_idx = hit_right
+    else:
+        run_idx = hit_right[: breaks[0] + 1]
+    if run_idx.size < min_run_bins:
+        return None, low_depth_points
+
+    # 右端以半阈值容差向右扩展（把污染带尾部略微稀释的箱并入）
+    ext_mask = (low_ratios >= half) & valid_bin & (low_counts >= 20)
+    lo, hi = int(run_idx[0]), int(run_idx[-1])
+    while hi + 1 < len(gc_centers) and ext_mask[hi + 1]:
+        hi += 1
+
+    run_low = float(gc_centers[lo])
+    run_high = float(gc_centers[hi])
     expanded = (gc >= run_low - gc_grid / 2) & (gc <= run_high + gc_grid / 2) & low_mask
     if expanded.sum() < 50:
-        return FitResult(False, None, None, None, None, None, low_depth_points)
+        return None, low_depth_points
 
-    ridge_depth_at_points = np.interp(gc[expanded], gc_centers, ridge_profile["ridge_depths"])
-    residual_below_ridge = ridge_depth_at_points - depth[expanded]
-    strong_mask = residual_below_ridge >= max(np.percentile(residual_below_ridge, 25), low_depth_max * 0.25)
-    if strong_mask.sum() < 20:
-        strong_mask = np.ones(residual_below_ridge.shape, dtype=bool)
+    ridge_profile["contam_gc_start"] = run_low
+    ridge_profile["contam_gc_end"] = run_high
+    ridge_profile["valley_gc"] = float(gc_centers[valley_i])
+    ridge_profile["valley_low_ratio"] = valley_ratio
+    ridge_profile["low_ratio_threshold"] = float(threshold)
+    return (run_low, run_high), low_depth_points
 
-    x_sel = gc[expanded][strong_mask]
-    y_sel = depth[expanded][strong_mask]
 
-    bin_centers: list[float] = []
-    upper_depths: list[float] = []
-    weights: list[float] = []
-    for idx in best_run:
-        lo = gc_centers[idx] - gc_grid / 2
-        hi = gc_centers[idx] + gc_grid / 2
-        if idx == best_run[-1]:
-            mask = (x_sel >= lo) & (x_sel <= hi)
-        else:
-            mask = (x_sel >= lo) & (x_sel < hi)
-        if mask.sum() < 8:
-            continue
-        y_bin = y_sel[mask]
-        upper_q = float(np.quantile(y_bin, 0.97))
-        upper_q = min(upper_q + 0.2, low_depth_max)
-        bin_centers.append(float(gc_centers[idx]))
-        upper_depths.append(upper_q)
-        weights.append(float(mask.sum()))
+def fit_contamination_line(
+    gc: np.ndarray,
+    depth: np.ndarray,
+    gc_start: float | None,
+    *,
+    low_depth_max: float = 12.0,
+    depth_floor: float = 2.0,
+    depth_step: float = 0.5,
+    min_coverage: float = 0.9,
+    g1: float = G1_GC,
+    min_region_points: int = 50,
+    max_sample_points: int = 20000,
+) -> LineCandidate:
+    """端点参数化网格搜索：在 [depth_floor, low_depth_max]^2 上搜 (d_left, d_right)，
+    取覆盖率 >= min_coverage 的最低线（d_left + d_right 最小）。"""
+    low_depth_points = int((depth <= low_depth_max).sum())
+    empty = LineCandidate(False, gc_start, None, None, None, None, None, None, 0, low_depth_points)
+    if gc_start is None:
+        return empty
 
-    if len(bin_centers) < 2:
-        return FitResult(False, None, None, None, None, None, low_depth_points)
+    region = (gc >= gc_start) & (gc <= g1) & (depth <= low_depth_max) & (depth >= 0)
+    gr, dr = gc[region], depth[region]
+    empty.low_points_in_region = int(gr.size)
+    if gr.size < min_region_points:
+        return empty
+    if gr.size > max_sample_points:
+        rng = np.random.default_rng(0)  # 固定种子，保证确定性
+        sel = rng.choice(gr.size, max_sample_points, replace=False)
+        gr, dr = gr[sel], dr[sel]
 
-    coef = np.polyfit(np.asarray(bin_centers), np.asarray(upper_depths), deg=1, w=np.asarray(weights))
-    slope = float(np.clip(coef[0], -0.6, 0.1))
-    intercept = float(coef[1])
+    t = (gr - gc_start) / (g1 - gc_start)
+    grid = np.arange(depth_floor, low_depth_max + depth_step / 2, depth_step)
+    dL = grid[:, None, None]
+    dR = grid[None, :, None]
+    tt = t[None, None, :]
+    line_vals = dL * (1.0 - tt) + dR * tt  # (N, N, M)
+    cover = (dr[None, None, :] <= line_vals).mean(axis=2)  # (N, N)
 
-    predicted = slope * np.asarray(bin_centers) + intercept
-    mae = float(np.average(np.abs(np.asarray(upper_depths) - predicted), weights=np.asarray(weights)))
-    separation = float(min(1.0, np.average(np.asarray(weights)) / max(low_depth_points, 1) * len(bin_centers)))
-    balance = float(min(1.0, low_counts[best_run].sum() / max(low_depth_points, 1)))
-    score = float(max(0.0, 1.0 - mae / max(low_depth_max, 1e-6)) * separation)
-    return FitResult(True, slope, intercept, separation, balance, score, low_depth_points)
+    idx = np.arange(grid.size)
+    order_ok = idx[:, None] <= idx[None, :]  # d_left <= d_right（非负斜率）
+    valid = order_ok & (cover >= min_coverage)
+    if not valid.any():
+        empty.coverage = float(cover[order_ok].max()) if order_ok.any() else 0.0
+        return empty
+
+    key = np.where(valid, grid[:, None] + grid[None, :], np.inf)
+    iL, iR = np.unravel_index(int(np.argmin(key)), key.shape)
+    d_left = float(grid[iL])
+    d_right = float(grid[iR])
+    slope = (d_right - d_left) / (g1 - gc_start)
+    intercept = d_left - slope * gc_start
+    return LineCandidate(
+        True,
+        gc_start,
+        None,
+        d_left,
+        d_right,
+        float(slope),
+        float(intercept),
+        float(cover[iL, iR]),
+        int(gr.size),
+        low_depth_points,
+    )
 
 
 def compute_global_stats(
@@ -312,7 +364,7 @@ def compute_global_stats(
     line_eps: float,
     low_depth_max: float,
 ) -> dict:
-    """按右下污染区统计点数与占比。"""
+    """按右下污染区统计点数与占比（判定口径不变）。"""
     line_depth = slope * gc + intercept
     boundary = np.minimum(line_depth, low_depth_max)
     boundary = np.maximum(boundary, 0.0)
@@ -342,19 +394,31 @@ def compute_global_stats(
     }
 
 
+def _draw_line(ax, line: LineCandidate, low_depth_max: float, line_eps: float, *, color: str, style: str, label: str) -> None:
+    xs = np.linspace(line.gc_start, G1_GC, 240)
+    ys = np.minimum(line.slope * xs + line.intercept, low_depth_max)
+    ys = np.maximum(ys, 0.0)
+    ax.plot(xs, ys, color=color, linestyle=style, linewidth=2.0, label=label)
+    if style == "-":
+        ax.plot(xs, np.minimum(ys + line_eps, low_depth_max), color=color, linewidth=1.0, alpha=0.6)
+        ax.plot(xs, np.maximum(ys - line_eps, 0.0), color=color, linewidth=1.0, alpha=0.6, label=f"boundary band (+/-{line_eps:g})")
+        ax.axvline(line.gc_start, color=color, linestyle=":", linewidth=1.2, alpha=0.9, label=f"contam GC start {line.gc_start:.1f}")
+
+
 def plot_gc_depth(
     gc: np.ndarray,
     depth: np.ndarray,
     out_png: Path,
     ridge: RidgeResult,
     ridge_profile: dict[str, np.ndarray],
-    fit: FitResult,
+    line: LineCandidate | None,
     low_depth_max: float,
     line_eps: float,
     plot_depth_max: float | None,
     title: str,
+    prev_line: LineCandidate | None = None,
 ) -> None:
-    """输出密度图 + 直线可视化。"""
+    """输出密度图 + 直线可视化。prev_line 非空时以灰虚线画出算法第一遍线作对照。"""
     out_png.parent.mkdir(parents=True, exist_ok=True)
 
     y_max = float(np.percentile(depth, 99.5)) if plot_depth_max is None else float(plot_depth_max)
@@ -395,15 +459,19 @@ def plot_gc_depth(
                 label="main ridge",
             )
 
-    if fit.exists and (fit.slope is not None) and (fit.intercept is not None):
-        gc_start = ridge_profile.get("contam_gc_start", 20.0)
-        xs = np.linspace(gc_start, 95, 240)
-        ys = np.minimum(fit.slope * xs + fit.intercept, low_depth_max)
-        ys = np.maximum(ys, 0.0)
-        ax.plot(xs, ys, color="#006d2c", linewidth=2.2, label=f"contam top: y={fit.slope:.4f}x+{fit.intercept:.3f}")
-        ax.plot(xs, np.minimum(ys + line_eps, low_depth_max), color="#238b45", linewidth=1.0, alpha=0.6)
-        ax.plot(xs, np.maximum(ys - line_eps, 0.0), color="#238b45", linewidth=1.0, alpha=0.6, label=f"boundary band (+/-{line_eps:g})")
-        ax.axvline(gc_start, color="#31a354", linestyle=":", linewidth=1.2, alpha=0.9, label=f"contam GC start {gc_start:.1f}")
+    if prev_line is not None and prev_line.exists:
+        _draw_line(
+            ax, prev_line, low_depth_max, line_eps,
+            color="#999999", style="--",
+            label=f"algo first line: dL={prev_line.d_left:.1f} dR={prev_line.d_right:.1f}",
+        )
+
+    if line is not None and line.exists:
+        _draw_line(
+            ax, line, low_depth_max, line_eps,
+            color="#006d2c", style="-",
+            label=f"contam top: dL={line.d_left:.1f} dR={line.d_right:.1f} (y={line.slope:.4f}x+{line.intercept:.3f})",
+        )
 
     ax.set_xlim(20, 95)
     ax.set_ylim(0, y_max)
@@ -417,27 +485,22 @@ def plot_gc_depth(
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="GC-Depth 低深度线性分割与重度污染判定")
+    parser = argparse.ArgumentParser(description="GC-Depth 低深度线性分割与重度污染判定（端点参数化 + LLM 视觉复核）")
     parser.add_argument("--pos", required=True, help="输入 .pos 文件路径")
     parser.add_argument("--out-json", default=None, help="输出 JSON 路径（默认: outputs/gc_line/<样本名>.gc_line.json）")
     parser.add_argument("--out-png", default=None, help="输出 PNG 路径（默认: outputs/gc_line/<样本名>.gc_line.png）")
 
-    parser.add_argument("--low-depth-max", type=float, default=12.0, help="搜索分割线时使用的低深度上限")
-    parser.add_argument("--line-eps", type=float, default=0.4, help="定义“在线上”的容忍带宽")
-    parser.add_argument("--heavy-threshold", type=float, default=0.07, help="重度污染阈值: below/on > threshold")
-
-    parser.add_argument("--slope-min", type=float, default=-0.5)
-    parser.add_argument("--slope-max", type=float, default=0.5)
-    parser.add_argument("--slope-steps", type=int, default=401)
-
-    parser.add_argument("--residual-bins", type=int, default=240)
-    parser.add_argument("--smooth-sigma", type=float, default=2.0)
-    parser.add_argument("--peak-min-gap-bins", type=int, default=20)
-    parser.add_argument("--min-separation", type=float, default=0.35)
-    parser.add_argument("--min-balance", type=float, default=0.10)
-    parser.add_argument("--gc-grid", type=float, default=0.5, help="低深度点云量化的 GC 步长")
-    parser.add_argument("--depth-grid", type=float, default=0.2, help="低深度点云量化的 depth 步长")
-
+    parser.add_argument("--low-depth-max", type=float, default=12.0, help="低深度搜索区上限（蓝虚线）")
+    parser.add_argument("--line-eps", type=float, default=0.4, help="诊断带宽阈值（仅诊断统计与绘图）")
+    parser.add_argument("--heavy-threshold", type=float, default=0.07, help="重度污染阈值: contam/total > threshold")
+    parser.add_argument("--min-coverage", type=float, default=0.9, help="边界线覆盖率下限（区域低深度点位于线下的比例）")
+    parser.add_argument("--depth-floor", type=float, default=2.0, help="端点深度下限（避开 depth≈0 伪迹）")
+    parser.add_argument("--depth-step", type=float, default=0.5, help="端点深度网格步长")
+    parser.add_argument("--gc-grid", type=float, default=0.5, help="GC 分箱步长")
+    parser.add_argument("--smooth-sigma", type=float, default=2.0, help="主脊线平滑强度")
+    parser.add_argument("--no-llm", action="store_true", help="关闭 LLM 视觉复核（默认开启）")
+    parser.add_argument("--llm-rounds", type=int, default=2, help="LLM 复核最大轮数")
+    parser.add_argument("--llm-timeout", type=float, default=60.0, help="单轮 LLM 调用超时秒数")
     parser.add_argument("--plot-depth-max", type=float, default=None, help="绘图 y 轴上限；默认自动取 depth 99.5 分位")
     return parser.parse_args()
 
@@ -446,20 +509,19 @@ def run_gc_depth_line(
     pos_path: str | Path,
     out_json: str | Path | None = None,
     out_png: str | Path | None = None,
+    *,
     low_depth_max: float = 12.0,
     line_eps: float = 0.4,
     heavy_threshold: float = 0.07,
-    slope_min: float = -0.5,
-    slope_max: float = 0.5,
-    slope_steps: int = 401,
-    residual_bins: int = 240,
-    smooth_sigma: float = 2.0,
-    peak_min_gap_bins: int = 20,
-    min_separation: float = 0.35,
-    min_balance: float = 0.10,
+    min_coverage: float = 0.9,
+    depth_floor: float = 2.0,
+    depth_step: float = 0.5,
     gc_grid: float = 0.5,
-    depth_grid: float = 0.2,
+    smooth_sigma: float = 2.0,
     plot_depth_max: float | None = None,
+    llm_adjust: bool = True,
+    llm_max_rounds: int = 2,
+    llm_timeout_sec: float = 60.0,
 ) -> dict:
     pos_path = Path(pos_path).expanduser().resolve()
     if not pos_path.exists():
@@ -489,30 +551,140 @@ def run_gc_depth_line(
         ridge_sigma=smooth_sigma,
     )
 
-    fit = find_contamination_region(
-        gc=gc,
-        depth=depth,
-        ridge=ridge,
-        ridge_profile=ridge_profile,
+    run_range, low_depth_points = detect_gc_start(
+        gc, depth, ridge, ridge_profile,
         low_depth_max=low_depth_max,
-        side_eps=line_eps,
         gc_grid=gc_grid,
     )
+    gc_start = run_range[0] if run_range else None
 
-    stats = None
-    heavy = False
-    if fit.exists and (fit.slope is not None) and (fit.intercept is not None):
-        gc_start = float(ridge_profile.get("contam_gc_start", ridge.peak_gc or 20.0))
-        stats = compute_global_stats(
-            gc,
-            depth,
-            fit.slope,
-            fit.intercept,
-            gc_start=gc_start,
-            line_eps=line_eps,
-            low_depth_max=low_depth_max,
+    algo_line = fit_contamination_line(
+        gc, depth, gc_start,
+        low_depth_max=low_depth_max,
+        depth_floor=depth_floor,
+        depth_step=depth_step,
+        min_coverage=min_coverage,
+    )
+    if run_range:
+        algo_line.gc_end = run_range[1]
+
+    def compute_stats(g0: float, slope: float, intercept: float) -> dict:
+        return compute_global_stats(
+            gc, depth, slope, intercept,
+            gc_start=g0, line_eps=line_eps, low_depth_max=low_depth_max,
         )
-        heavy = bool(stats["contam_over_total_ratio"] > heavy_threshold)
+
+    stats = compute_stats(algo_line.gc_start, algo_line.slope, algo_line.intercept) if algo_line.exists else None
+    heavy = bool(stats["contam_over_total_ratio"] > heavy_threshold) if stats else False
+
+    def render(line_obj: LineCandidate | None, prev: LineCandidate | None = None, suffix: str = "") -> None:
+        plot_gc_depth(
+            gc, depth, out_png_path, ridge, ridge_profile, line_obj,
+            low_depth_max=low_depth_max, line_eps=line_eps,
+            plot_depth_max=plot_depth_max,
+            title=f"GC-Depth Split Detection | {'Heavy' if heavy else 'Not Heavy'}{suffix}",
+            prev_line=prev,
+        )
+
+    render(algo_line)
+
+    # ---- 第二遍：LLM 视觉复核（默认开启，任何异常降级为第一遍结果） ----
+    llm_summary: dict
+    final_line = algo_line
+    final_stats = stats
+    if not llm_adjust:
+        llm_summary = {"enabled": False, "status": "disabled", "rounds": 0, "final_action": "none", "log_path": None}
+    elif not (ridge.exists and low_depth_points >= 100):
+        llm_summary = {"enabled": True, "status": "skipped_no_signal", "rounds": 0, "final_action": "none", "log_path": None}
+    else:
+        try:
+            import gc_llm_adjust
+
+            algo_params = (
+                {
+                    "gc_start": algo_line.gc_start,
+                    "d_left": algo_line.d_left,
+                    "d_right": algo_line.d_right,
+                    "slope": algo_line.slope,
+                    "intercept": algo_line.intercept,
+                }
+                if algo_line.exists
+                else None
+            )
+            log_path = out_json_path.parent / (out_json_path.stem + ".llm_log.json")
+
+            def llm_render(params: dict) -> None:
+                line_obj = LineCandidate(
+                    True, params["gc_start"], None, params["d_left"], params["d_right"],
+                    params["slope"], params["intercept"], None, 0, low_depth_points,
+                )
+                render(line_obj, suffix=" | LLM adjusting")
+
+            outcome = gc_llm_adjust.review_and_adjust(
+                algo_params=algo_params,
+                algo_stats=stats,
+                png_path=out_png_path,
+                log_path=log_path,
+                render_png=llm_render,
+                compute_stats=compute_stats,
+                heavy_threshold=heavy_threshold,
+                depth_floor=depth_floor,
+                low_depth_max=low_depth_max,
+                max_rounds=llm_max_rounds,
+                timeout_sec=llm_timeout_sec,
+                pos_path=str(pos_path),
+            )
+            llm_summary = outcome.summary()
+            if outcome.final_action == "no_contamination":
+                final_line = LineCandidate(
+                    False, None, None, None, None, None, None, None,
+                    algo_line.low_points_in_region, low_depth_points,
+                )
+                final_stats = None
+            elif outcome.final_action == "adjust" and outcome.final_params:
+                p = outcome.final_params
+                final_line = LineCandidate(
+                    True, p["gc_start"],
+                    algo_line.gc_end if algo_line.exists else None,
+                    p["d_left"], p["d_right"], p["slope"], p["intercept"],
+                    algo_line.coverage if algo_line.exists else None,
+                    algo_line.low_points_in_region, low_depth_points,
+                )
+                final_stats = compute_stats(p["gc_start"], p["slope"], p["intercept"])
+        except Exception as exc:  # 导入失败/任何意外 → 降级
+            llm_summary = {
+                "enabled": True,
+                "status": "degraded_error",
+                "rounds": 0,
+                "final_action": "none",
+                "log_path": None,
+                "error": f"{type(exc).__name__}: {exc}",
+            }
+
+    heavy = bool(final_stats["contam_over_total_ratio"] > heavy_threshold) if final_stats else False
+    adjusted = llm_summary.get("final_action") in {"adjust", "no_contamination"} and llm_summary.get("status", "").startswith("ok")
+    render(final_line, prev=algo_line if (adjusted and algo_line.exists and final_line.exists) else None)
+
+    # ---- 判定理由 ----
+    if final_line.exists and final_stats is not None:
+        reason = (
+            f"contam/total={final_stats['contam_over_total_ratio']:.4f} > {heavy_threshold}"
+            if heavy
+            else f"contam/total={final_stats['contam_over_total_ratio']:.4f} <= {heavy_threshold}"
+        )
+    else:
+        reason = "未找到满足右下污染区条件的边界线"
+    llm_status = llm_summary.get("status")
+    if llm_status == "ok_no_contamination":
+        algo_ratio = (stats or {}).get("contam_over_total_ratio")
+        if algo_line.exists and algo_ratio is not None:
+            reason += f"；LLM复核: 判定无污染带（算法第一遍 ratio={algo_ratio:.4f}）"
+        else:
+            reason = "LLM视觉复核判定无右下污染带"
+    elif llm_status == "ok_adjusted":
+        reason += f"；LLM复核: 调整边界线（{llm_summary.get('rounds', 0)}轮）"
+    elif llm_status in {"degraded_json", "degraded_error", "degraded_import"}:
+        reason += f"；LLM复核降级({llm_status}): {llm_summary.get('error', '')}"
 
     result = {
         "input": {
@@ -523,32 +695,23 @@ def run_gc_depth_line(
             "low_depth_max": low_depth_max,
             "line_eps": line_eps,
             "heavy_threshold": heavy_threshold,
-            "slope_min": slope_min,
-            "slope_max": slope_max,
-            "slope_steps": slope_steps,
-            "residual_bins": residual_bins,
-            "smooth_sigma": smooth_sigma,
-            "peak_min_gap_bins": peak_min_gap_bins,
-            "min_separation": min_separation,
-            "min_balance": min_balance,
+            "min_coverage": min_coverage,
+            "depth_floor": depth_floor,
+            "depth_step": depth_step,
             "gc_grid": gc_grid,
-            "depth_grid": depth_grid,
+            "smooth_sigma": smooth_sigma,
+            "llm_adjust": llm_adjust,
+            "llm_max_rounds": llm_max_rounds,
+            "llm_timeout_sec": llm_timeout_sec,
         },
         "ridge": asdict(ridge),
-        "fit": asdict(fit),
-        "global_stats": stats,
+        "fit": asdict(final_line),
+        "global_stats": final_stats,
         "decision": {
             "heavy_contamination": heavy,
-            "reason": (
-                "未找到满足右下污染区条件的边界线"
-                if not fit.exists
-                else (
-                    f"contam/total={stats['contam_over_total_ratio']:.4f} > {heavy_threshold}"
-                    if heavy
-                    else f"contam/total={stats['contam_over_total_ratio']:.4f} <= {heavy_threshold}"
-                )
-            ),
+            "reason": reason,
         },
+        "llm_adjustment": llm_summary,
         "artifacts": {
             "json": str(out_json_path),
             "png": str(out_png_path),
@@ -558,20 +721,6 @@ def run_gc_depth_line(
     out_json_path.parent.mkdir(parents=True, exist_ok=True)
     with open(out_json_path, "w", encoding="utf-8") as f:
         json.dump(result, f, ensure_ascii=False, indent=2)
-
-    plot_title = f"GC-Depth Split Detection | {'Heavy' if heavy else 'Not Heavy'}"
-    plot_gc_depth(
-        gc=gc,
-        depth=depth,
-        out_png=out_png_path,
-        ridge=ridge,
-        ridge_profile=ridge_profile,
-        fit=fit,
-        low_depth_max=low_depth_max,
-        line_eps=line_eps,
-        plot_depth_max=plot_depth_max,
-        title=plot_title,
-    )
 
     return result
 
@@ -585,17 +734,15 @@ def main_cli() -> None:
         low_depth_max=args.low_depth_max,
         line_eps=args.line_eps,
         heavy_threshold=args.heavy_threshold,
-        slope_min=args.slope_min,
-        slope_max=args.slope_max,
-        slope_steps=args.slope_steps,
-        residual_bins=args.residual_bins,
-        smooth_sigma=args.smooth_sigma,
-        peak_min_gap_bins=args.peak_min_gap_bins,
-        min_separation=args.min_separation,
-        min_balance=args.min_balance,
+        min_coverage=args.min_coverage,
+        depth_floor=args.depth_floor,
+        depth_step=args.depth_step,
         gc_grid=args.gc_grid,
-        depth_grid=args.depth_grid,
+        smooth_sigma=args.smooth_sigma,
         plot_depth_max=args.plot_depth_max,
+        llm_adjust=not args.no_llm,
+        llm_max_rounds=args.llm_rounds,
+        llm_timeout_sec=args.llm_timeout,
     )
     _print_summary(result)
 
@@ -606,14 +753,21 @@ def _print_summary(result: dict) -> None:
     fit = result.get("fit", {})
     stats = result.get("global_stats")
     if fit.get("exists"):
-        print(f"[FIT] y = {fit['slope']:.6f} * GC + {fit['intercept']:.6f}")
+        print(
+            f"[FIT] g0={fit['gc_start']:.1f} dL={fit['d_left']:.2f} dR={fit['d_right']:.2f} "
+            f"coverage={fit.get('coverage') or 0:.3f} -> y={fit['slope']:.6f}*GC+{fit['intercept']:.6f}"
+        )
     else:
         print("[FIT] 未检出可用污染边界线")
+    llm = result.get("llm_adjustment", {})
+    print(f"[LLM] status={llm.get('status')} rounds={llm.get('rounds', 0)} action={llm.get('final_action')} log={llm.get('log_path')}")
     if stats:
         print(
             f"[STAT] contam={stats['line_below_count']} total={stats['line_below_count'] + stats['line_on_count']} "
             f"contam/total={stats['contam_over_total_ratio']:.6f} below/on={stats['below_over_on_ratio']:.6f}"
         )
+        print(f"[DECISION] heavy_contamination={result['decision']['heavy_contamination']}")
+    else:
         print(f"[DECISION] heavy_contamination={result['decision']['heavy_contamination']}")
 
 

@@ -19,6 +19,7 @@ KMER_PATTERN_CN = {
     'high_hetero_diplo': '高杂合二倍体',
     'high_repetitive_diplo': '高重复二倍体',
     'tetraploid': '四倍体',
+    'hexaploid': '六倍体',
     'no_peak': '无峰',
     'unknown': '未知',
     'error': '错误',
@@ -47,6 +48,8 @@ def to_arabic_ploidy(ploidy_text):
         'triploid': '3倍体',
         '四倍体': '4倍体',
         'tetraploid': '4倍体',
+        '六倍体': '6倍体',
+        'hexaploid': '6倍体',
     }
     return mapping.get(s, '')
 

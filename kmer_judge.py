@@ -16,6 +16,7 @@ PATTERN_CN = {
     'triploid': '三倍体',
     'high_repetitive_diplo': '二倍体',
     'tetraploid': '四倍体',
+    'hexaploid': '六倍体',
     'unknown': '未知倍型',
     'all_peaks_too_low': '所有峰过低',
     'no_peak_detected': '未检测到峰',
@@ -365,32 +366,23 @@ def classify_peaks(peak_depths, peak_freqs=None, tolerance=0.10):
 
     base = peak_depths[0]
     ratios = [d / base for d in peak_depths]
+    depths_str = ', '.join(f'{d:.0f}' for d in peak_depths)
+    ratio_str = ':'.join(f'{r:.2f}' for r in ratios)
 
-    PATTERNS = [
-        ('diploid_hetero',    [1, 2],    '杂合二倍体'),
-        ('triploid',          [1, 2, 3], '三倍体'),
-        ('tetraploid',        [1, 2, 3, 4], '四倍体'),
-    ]
-
-    # 新逻辑：n>=2 时先检查 1:2，若不符合则检查1:3和1:4（扩展范围），否则直接停止
+    # 门控：首两峰需约等于 1:2；不满足时仅双峰允许 1:3 / 1:4 扩展，否则直接停止
     if not _match_ratios(ratios[:2], [1, 2], tolerance):
-        # 检查是否为1:3（2.7-3.3范围）
         if n == 2 and 2.7 <= ratios[1] <= 3.3:
-            depths_str = ', '.join(f'{d:.0f}' for d in peak_depths)
             return 'triploid', True, f'2个峰，depth=[{depths_str}]，比值≈1:3，三倍体'
-        # 检查是否为1:4（3.5-4.2范围）
         if n == 2 and 3.5 <= ratios[1] <= 4.2:
-            depths_str = ', '.join(f'{d:.0f}' for d in peak_depths)
             return 'tetraploid', True, f'2个峰，depth=[{depths_str}]，比值≈1:4，四倍体'
-        ratio_str = ':'.join(f'{r:.2f}' for r in ratios)
-        depths_str = ', '.join(f'{d:.0f}' for d in peak_depths)
         return 'unknown', False, f'{n}个峰，depth=[{depths_str}]，比值={ratio_str}，不符合1:2，停止判定'
 
-    # 1:2:3 特判：仅三峰时，第三峰频率达到主峰40%才判三倍体，否则判二倍体
-    if n == 3 and _match_ratios(ratios[:3], [1, 2, 3], tolerance):
+    # 以下规则要求峰数与比值完整匹配已知峰型，不再截断部分峰勉强判定
+
+    # 1:2:3 特判（仅三峰）：第三峰频率达到主峰40%才判三倍体，否则判二倍体
+    if n == 3 and _match_ratios(ratios, [1, 2, 3], tolerance):
         main_peak_freq = float(np.max(peak_freqs))
         third_peak_freq = float(peak_freqs[2])
-        depths_str = ', '.join(f'{d:.0f}' for d in peak_depths[:3])
         if third_peak_freq >= main_peak_freq * 0.4:
             return 'triploid', True, (
                 f'{n}个峰，depth=[{depths_str}]，比值≈1:2:3，'
@@ -401,11 +393,18 @@ def classify_peaks(peak_depths, peak_freqs=None, tolerance=0.10):
             f'第三峰频率({third_peak_freq:.0f})<主峰40%({main_peak_freq * 0.4:.0f})，判为二倍体'
         )
 
-    # 1:2:4 特判：第三峰低于主峰50%时判二倍体，否则判四倍体
-    if n >= 3 and _match_ratios(ratios[:3], [1, 2, 4], tolerance):
+    # 1:2:3:4（四峰）→ 四倍体
+    if n == 4 and _match_ratios(ratios, [1, 2, 3, 4], tolerance):
+        return 'tetraploid', True, f'{n}个峰，depth=[{depths_str}]，比值≈1:2:3:4，四倍体'
+
+    # 1:2:3:6（四峰）→ 六倍体
+    if n == 4 and _match_ratios(ratios, [1, 2, 3, 6], tolerance):
+        return 'hexaploid', True, f'{n}个峰，depth=[{depths_str}]，比值≈1:2:3:6，六倍体'
+
+    # 1:2:4 特判（仅三峰，优先级低于 1:2:3:4）：第三峰低于主峰50%时判二倍体，否则判四倍体
+    if n == 3 and _match_ratios(ratios, [1, 2, 4], tolerance):
         main_peak_freq = float(np.max(peak_freqs))
         third_peak_freq = float(peak_freqs[2])
-        depths_str = ', '.join(f'{d:.0f}' for d in peak_depths[:3])
         if third_peak_freq < main_peak_freq * 0.5:
             return 'high_repetitive_diplo', True, (
                 f'{n}个峰，depth=[{depths_str}]，比值≈1:2:4，'
@@ -416,27 +415,16 @@ def classify_peaks(peak_depths, peak_freqs=None, tolerance=0.10):
             f'第三峰频率({third_peak_freq:.0f})>=主峰50%({main_peak_freq * 0.5:.0f})，判为四倍体'
         )
 
-    # 先尝试更高倍体判定，然后尝试 tetraploid
-    best_match = None
-    best_len = 0
-    for name, expected, desc in PATTERNS[1:]:
-        if len(expected) > n:
-            continue
-        if _match_ratios(ratios[:len(expected)], expected, tolerance):
-            if len(expected) > best_len:
-                best_match = (name, expected, desc)
-                best_len = len(expected)
+    # 1:2:6（三峰）→ 六倍体
+    if n == 3 and _match_ratios(ratios, [1, 2, 6], tolerance):
+        return 'hexaploid', True, f'{n}个峰，depth=[{depths_str}]，比值≈1:2:6，六倍体'
 
-    if best_match is not None:
-        name, expected, desc = best_match
-        ratio_str = ':'.join(map(str, expected))
-        depths_str = ', '.join(f'{d:.0f}' for d in peak_depths[:len(expected)])
-        return name, True, f'{n}个峰，depth=[{depths_str}]，比值≈{ratio_str}，{desc}'
+    # 双峰且满足 1:2 → 二倍体
+    if n == 2:
+        return 'diploid_hetero', True, f'2个峰，depth=[{depths_str}]，比值≈1:2，二倍体'
 
-    # 1:2 符合，但没有更高倍体匹配 -> 视为二倍体
-    ratio_str = ':'.join(map(str, [1, 2]))
-    depths_str = ', '.join(f'{d:.0f}' for d in peak_depths[:2])
-    return 'diploid_hetero', True, f'{n}个峰，depth=[{depths_str}]，比值≈{ratio_str}，二倍体（其余峰未计入判定）'
+    # 峰数或比值不属于任何已知峰型 → unknown，不再截断部分峰勉强匹配
+    return 'unknown', False, f'{n}个峰，depth=[{depths_str}]，比值={ratio_str}，不属于已知峰型，判为unknown'
 
 
 def get_main_peak_depth(peak_depths, peak_freqs):
@@ -459,10 +447,10 @@ def is_main_peak_depth_consistent(depth_a, depth_b, tolerance_ratio=0.10):
     return abs(float(depth_a) - float(depth_b)) / max_depth <= float(tolerance_ratio)
 
 
-def select_pattern_peaks(peak_depths, peak_freqs, pattern, tolerance=0.10):
+def select_pattern_peaks(peak_depths, peak_freqs, pattern=None, tolerance=0.10):
     """
     返回“当前判型实际使用到的峰集合”（按 depth 升序）。
-    若无法可靠映射，则返回全部输入峰。
+    当前判定规则不做峰截断：任何判型都使用全部过滤后的峰，故直接返回全部输入峰。
     """
     if peak_depths is None or peak_freqs is None:
         return np.array([], dtype=float), np.array([], dtype=float)
@@ -473,54 +461,7 @@ def select_pattern_peaks(peak_depths, peak_freqs, pattern, tolerance=0.10):
         return depths, freqs
 
     sort_idx = np.argsort(depths)
-    depths = depths[sort_idx]
-    freqs = freqs[sort_idx]
-    n = len(depths)
-    if n == 1:
-        return depths[:1], freqs[:1]
-
-    base = depths[0]
-    ratios = [d / base for d in depths]
-    pat = normalize_ploidy_pattern(pattern)
-
-    # 1:2:3 特判对应的“二倍体”
-    if pat == 'diploid' and n == 3 and _match_ratios(ratios[:3], [1, 2, 3], tolerance):
-        main_peak_freq = float(np.max(freqs))
-        third_peak_freq = float(freqs[2])
-        if third_peak_freq < main_peak_freq * 0.4:
-            return depths[:3], freqs[:3]
-
-    # 1:2:4 特判对应的“二倍体”
-    if pat == 'diploid' and n >= 3 and _match_ratios(ratios[:3], [1, 2, 4], tolerance):
-        main_peak_freq = float(np.max(freqs))
-        third_peak_freq = float(freqs[2])
-        if third_peak_freq < main_peak_freq * 0.5:
-            return depths[:3], freqs[:3]
-
-    if pat == 'triploid':
-        if n == 2 and 2.7 <= ratios[1] <= 3.3:
-            return depths[:2], freqs[:2]
-        if n >= 3 and _match_ratios(ratios[:3], [1, 2, 3], tolerance):
-            return depths[:3], freqs[:3]
-        return depths, freqs
-
-    if pat == 'tetraploid':
-        if n == 2 and 3.5 <= ratios[1] <= 4.2:
-            return depths[:2], freqs[:2]
-        if n >= 3 and _match_ratios(ratios[:3], [1, 2, 4], tolerance):
-            main_peak_freq = float(np.max(freqs))
-            third_peak_freq = float(freqs[2])
-            if third_peak_freq >= main_peak_freq * 0.5:
-                return depths[:3], freqs[:3]
-        if n >= 4 and _match_ratios(ratios[:4], [1, 2, 3, 4], tolerance):
-            return depths[:4], freqs[:4]
-        return depths, freqs
-
-    # 其他二倍体判型默认使用前两峰（与 classify_peaks 主流程一致）
-    if pat == 'diploid':
-        return depths[:2], freqs[:2]
-
-    return depths, freqs
+    return depths[sort_idx], freqs[sort_idx]
 
 
 def _normalize_cn_pattern(pattern_cn):
@@ -528,7 +469,7 @@ def _normalize_cn_pattern(pattern_cn):
         return '未知倍型'
     if '+' in pattern_cn:
         return '未知倍型'
-    if pattern_cn in {'二倍体', '三倍体', '四倍体'}:
+    if pattern_cn in {'二倍体', '三倍体', '四倍体', '六倍体'}:
         return pattern_cn
     if pattern_cn in {'未知倍型', '峰型异常', '所有峰过低', '未检测到峰'}:
         return '未知倍型'
@@ -619,7 +560,7 @@ def _analyze_ploidy_by_agent(species_name, result):
     llm = get_qwen_plus_llm()
     prompt = (
         "你是倍性分析助手。根据物种先验证据判断该物种更可能的倍型。"
-        "请输出严格JSON，字段: pattern(二倍体/三倍体/四倍体/未知倍型),"
+        "请输出严格JSON，字段: pattern(二倍体/三倍体/四倍体/六倍体/未知倍型),"
         "confidence(高/中/低), reason(简要原因), sources(数组,每项含title,url,snippet)。\n"
         f"物种: {species_name}\n"
         f"k-mer脚本结果: {json.dumps(_to_jsonable(result), ensure_ascii=False)}\n"
@@ -675,8 +616,8 @@ def _attach_ploidy_analysis(result, tolerance, species_name=None):
     analysis_pattern = _normalize_cn_pattern(analysis.get('pattern'))
 
     if (
-        script_pattern in {'二倍体', '三倍体', '四倍体'}
-        and analysis_pattern in {'二倍体', '三倍体', '四倍体'}
+        script_pattern in {'二倍体', '三倍体', '四倍体', '六倍体'}
+        and analysis_pattern in {'二倍体', '三倍体', '四倍体', '六倍体'}
         and script_pattern != analysis_pattern
         and analysis.get("confidence") in {"高", "中"}
     ):

@@ -17,7 +17,7 @@ def get_qwen35_plus_llm():
         model="qwen3.5-plus",
         openai_api_key="sk-b200ea2f10dc484ba7e979809b8e0c37",
         openai_api_base="https://dashscope.aliyuncs.com/compatible-mode/v1",
-        extra_body={"enable_thinking": True}
+        extra_body={"enable_thinking": False}
     )
     return llm
 
@@ -59,7 +59,7 @@ def stream_with_thinking(client, model, question):
 
 if __name__ == '__main__':
     # 测试问题
-    test_question = "二代测序进行sRNA测序，建议进行PCA分析吗"
+    test_question = "你好呀"
     print("Qwen-3.5-Plus-LLM的回答：")
     llm = get_qwen35_plus_llm()
     print(llm.invoke(test_question))

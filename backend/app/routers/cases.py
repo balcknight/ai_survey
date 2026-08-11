@@ -194,6 +194,7 @@ def _ploidy_human(pattern: str | None) -> str:
         "二倍体": "推测二倍体",
         "三倍体": "推测三倍体",
         "四倍体": "推测四倍体",
+        "六倍体": "推测六倍体",
     }
     return mapping.get(pattern or "", f"待人工确认（{pattern or '未知'}）")
 
