@@ -43,9 +43,9 @@ VITE_API_BASE_URL=http://10.11.0.6:8001
 ### 后台运行（内网调试，关闭 VSCode 仍保持运行）
 ```bash
 mkdir -p logs
-setsid bash -lc 'cd /data/work/zhurui/survey_rec/frontend && exec npm run dev -- --host 0.0.0.0 --port 5173' \
-  > /data/work/zhurui/survey_rec/logs/frontend_dev.log 2>&1 < /dev/null &
-echo $! > /data/work/zhurui/survey_rec/logs/frontend_dev.pid
+setsid bash -lc 'cd /data/work/zhurui/ai_survey/frontend && exec npm run dev -- --host 0.0.0.0 --port 5173' \
+  > /data/work/zhurui/ai_survey/logs/frontend_dev.log 2>&1 < /dev/null &
+echo $! > /data/work/zhurui/ai_survey/logs/frontend_dev.pid
 ```
 
 停止后台服务：
