@@ -36,16 +36,12 @@ def _load_one_env_file(env_path: Path) -> None:
 
 def log_mail_settings_on_startup() -> None:
     settings = get_mail_settings()
-    masked_pwd = "已设置" if settings.password else "未设置"
     logger.info(
-        "邮件配置启动检查: enabled=%s, from=%s, to=%s, smtp=%s:%s, ssl=%s, password=%s",
+        "邮件配置启动检查: enabled=%s, to=%s, api_url=%s, local=%s",
         settings.enabled,
-        settings.from_addr,
         ",".join(settings.to_addrs) or "(空)",
-        settings.smtp_host,
-        settings.smtp_port,
-        settings.use_ssl,
-        masked_pwd,
+        settings.api_url,
+        settings.local,
     )
     if not settings.enabled:
         logger.info(
@@ -62,12 +58,8 @@ def _as_bool(value: str | None, default: bool = False) -> bool:
 @dataclass(frozen=True)
 class MailSettings:
     enabled: bool
-    smtp_host: str
-    smtp_port: int
-    use_ssl: bool
-    username: str
-    password: str
-    from_addr: str
+    api_url: str
+    local: str
     to_addrs: list[str]
     subject_prefix: str
     case_list_url: str
@@ -78,12 +70,8 @@ def get_mail_settings() -> MailSettings:
     to_addrs = [item.strip() for item in to_raw.split(",") if item.strip()]
     return MailSettings(
         enabled=_as_bool(os.getenv("MAIL_ENABLED"), default=False),
-        smtp_host=os.getenv("MAIL_SMTP_HOST", "smtp.qq.com").strip(),
-        smtp_port=int(os.getenv("MAIL_SMTP_PORT", "465").strip()),
-        use_ssl=_as_bool(os.getenv("MAIL_SMTP_USE_SSL"), default=True),
-        username=os.getenv("MAIL_SMTP_USERNAME", "1623893955@qq.com").strip(),
-        password=os.getenv("MAIL_SMTP_PASSWORD", "").strip(),
-        from_addr=os.getenv("MAIL_FROM", "1623893955@qq.com").strip(),
+        api_url=os.getenv("MAIL_API_URL", "http://172.17.64.36:8075/api/").strip(),
+        local=os.getenv("MAIL_LOCAL", "TJ").strip() or "TJ",
         to_addrs=to_addrs,
         subject_prefix=os.getenv("MAIL_SUBJECT_PREFIX", "[Survey提醒]").strip() or "[Survey提醒]",
         case_list_url=os.getenv("MAIL_CASE_LIST_URL", "http://10.11.0.6:5173/cases").strip(),

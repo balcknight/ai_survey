@@ -1,8 +1,8 @@
 from __future__ import annotations
 
 import logging
-import smtplib
-from email.message import EmailMessage
+
+import requests
 
 from ..config import get_mail_settings
 
@@ -20,13 +20,12 @@ def send_survey_done_email(
 ) -> None:
     settings = get_mail_settings()
     logger.info(
-        "邮件提醒准备发送: case_id=%s, enabled=%s, to=%s, host=%s:%s, ssl=%s",
+        "邮件提醒准备发送: case_id=%s, enabled=%s, to=%s, api_url=%s, local=%s",
         case_id,
         settings.enabled,
         ",".join(settings.to_addrs),
-        settings.smtp_host,
-        settings.smtp_port,
-        settings.use_ssl,
+        settings.api_url,
+        settings.local,
     )
     if not settings.enabled:
         logger.info("邮件提醒未启用，跳过发送。case_id=%s", case_id)
@@ -34,14 +33,8 @@ def send_survey_done_email(
     if not settings.to_addrs:
         logger.warning("邮件提醒已启用但 MAIL_TO 为空，跳过发送。case_id=%s", case_id)
         return
-    if not settings.password:
-        logger.warning("邮件提醒已启用但 MAIL_SMTP_PASSWORD 为空，跳过发送。case_id=%s", case_id)
-        return
-    if "<" in settings.password or ">" in settings.password:
-        logger.warning(
-            "邮件提醒已启用但 MAIL_SMTP_PASSWORD 看起来仍是占位值，跳过发送。case_id=%s",
-            case_id,
-        )
+    if not settings.api_url:
+        logger.warning("邮件提醒已启用但 MAIL_API_URL 为空，跳过发送。case_id=%s", case_id)
         return
 
     subject = f"{settings.subject_prefix} case_id={case_id} 判定完成"
@@ -61,22 +54,26 @@ def send_survey_done_email(
         ]
         body = "\n".join(lines)
 
-    message = EmailMessage()
-    message["Subject"] = subject
-    message["From"] = settings.from_addr
-    message["To"] = ",".join(settings.to_addrs)
-    message.set_content(body)
+    # 公司内部邮件网关：无需账号密码，POST 表单即可发送。
+    data = {
+        "BODY": body,
+        "LOCAL": settings.local,
+        "USER": ";".join(settings.to_addrs),
+        "TITLE": subject,
+    }
+    logger.info("邮件提醒通过内部网关发送。case_id=%s", case_id)
+    response = requests.post(
+        url=settings.api_url,
+        data=data,
+        headers={"Content-Type": "application/x-www-form-urlencoded"},
+        timeout=15,
+    )
+    response.raise_for_status()
 
-    if settings.use_ssl:
-        logger.info("邮件提醒使用 SMTP_SSL 发送。case_id=%s", case_id)
-        with smtplib.SMTP_SSL(settings.smtp_host, settings.smtp_port, timeout=15) as client:
-            client.login(settings.username, settings.password)
-            client.send_message(message)
-    else:
-        logger.info("邮件提醒使用 STARTTLS 发送。case_id=%s", case_id)
-        with smtplib.SMTP(settings.smtp_host, settings.smtp_port, timeout=15) as client:
-            client.starttls()
-            client.login(settings.username, settings.password)
-            client.send_message(message)
-
-    logger.info("邮件提醒发送成功: case_id=%s, to=%s", case_id, ",".join(settings.to_addrs))
+    logger.info(
+        "邮件提醒发送成功: case_id=%s, to=%s, resp_status=%s, resp_text=%s",
+        case_id,
+        ",".join(settings.to_addrs),
+        response.status_code,
+        response.text[:200],
+    )

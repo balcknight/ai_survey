@@ -683,13 +683,9 @@ cp .env.example .env
 可配置项示例（邮件相关，默认关闭）：
 ```bash
 export MAIL_ENABLED=false
-export MAIL_FROM="1623893955@qq.com"
 export MAIL_TO="zhurui8901@novogene.com"
-export MAIL_SMTP_HOST="smtp.qq.com"
-export MAIL_SMTP_PORT=465
-export MAIL_SMTP_USE_SSL=true
-export MAIL_SMTP_USERNAME="1623893955@qq.com"
-export MAIL_SMTP_PASSWORD="<QQ邮箱SMTP授权码>"
+export MAIL_API_URL="http://172.17.64.36:8075/api/"   # 公司内部邮件网关，无需账号密码
+export MAIL_LOCAL="TJ"                                  # 网关站点标识
 export MAIL_SUBJECT_PREFIX="[Survey提醒]"
 export MAIL_CASE_LIST_URL="http://10.11.0.6:5173/cases"
 ```
