@@ -76,3 +76,39 @@ def get_mail_settings() -> MailSettings:
         subject_prefix=os.getenv("MAIL_SUBJECT_PREFIX", "[Survey提醒]").strip() or "[Survey提醒]",
         case_list_url=os.getenv("MAIL_CASE_LIST_URL", "http://10.11.0.6:5173/cases").strip(),
     )
+
+
+@dataclass(frozen=True)
+class FeishuSettings:
+    enabled: bool
+    trigger_url: str
+    token: str
+    user_list: str
+
+
+def get_feishu_settings() -> FeishuSettings:
+    return FeishuSettings(
+        enabled=_as_bool(os.getenv("FEISHU_ENABLED"), default=False),
+        trigger_url=os.getenv(
+            "FEISHU_TRIGGER_URL",
+            "https://ocnz4cb25scn.feishu.cn/ai/api/v1/skill_runtime/namespaces/"
+            "spring_3bd562b8e3__c/trigger/g34g1xsq",
+        ).strip(),
+        token=os.getenv("FEISHU_TOKEN", "0.nlyb8zaaqwb").strip(),
+        # 提醒人先写死，后续可改为动态收件策略。
+        user_list=os.getenv("FEISHU_USER_LIST", "zhurui8901@novogene.com").strip(),
+    )
+
+
+def log_feishu_settings_on_startup() -> None:
+    settings = get_feishu_settings()
+    logger.info(
+        "飞书提醒配置启动检查: enabled=%s, user_list=%s, trigger_url=%s",
+        settings.enabled,
+        settings.user_list or "(空)",
+        settings.trigger_url,
+    )
+    if not settings.enabled:
+        logger.info(
+            "飞书提醒配置提示: 当前 FEISHU_ENABLED 为 false。若 .env 已设为 true，请检查是否被 shell 同名环境变量覆盖。"
+        )

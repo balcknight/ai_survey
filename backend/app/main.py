@@ -11,7 +11,7 @@ from sqlalchemy import func, select, text
 from sqlalchemy.exc import IntegrityError
 
 from . import models, security
-from .config import load_env_files, log_mail_settings_on_startup
+from .config import load_env_files, log_feishu_settings_on_startup, log_mail_settings_on_startup
 from .db import Base, SessionLocal, engine
 from .routers.auth import router as auth_router
 from .routers.cases import public_router as cases_public_router
@@ -141,6 +141,7 @@ def ensure_default_admin() -> None:
 def on_startup():
     init_db()
     log_mail_settings_on_startup()
+    log_feishu_settings_on_startup()
 
 
 @app.get("/health")

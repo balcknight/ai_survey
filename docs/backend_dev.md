@@ -659,6 +659,12 @@ backend/
     json_utils.py
     security.py        # 密码哈希 / 会话 token 纯工具
     deps.py            # 鉴权依赖 get_current_user
+    services/
+      survey_runner.py   # survey 判定执行
+      kmer_plot.py       # kmer 峰图绘制
+      gc_plot.py         # GC 图绘制
+      mailer.py          # 第二次提醒：内部邮件网关（人工复核备注）
+      feishu_notifier.py # 第一次提醒：飞书工作流触发
     routers/
       cases.py         # 受保护 router + 外部开放 public_router
       auth.py          # login / logout / me
@@ -690,6 +696,14 @@ export MAIL_SUBJECT_PREFIX="[Survey提醒]"
 export MAIL_CASE_LIST_URL="http://10.11.0.6:5173/cases"
 ```
 
+可配置项示例（飞书提醒相关，默认关闭）：
+```bash
+export FEISHU_ENABLED=false
+export FEISHU_TRIGGER_URL="https://ocnz4cb25scn.feishu.cn/ai/api/v1/skill_runtime/namespaces/spring_3bd562b8e3__c/trigger/g34g1xsq"
+export FEISHU_TOKEN="0.nlyb8zaaqwb"                  # 触发接口 Bearer token
+export FEISHU_USER_LIST="zhurui8901@novogene.com"    # 提醒人（先写死）
+```
+
 可配置项示例（登录鉴权相关）：
 ```bash
 export AUTH_TOKEN_TTL_HOURS=168      # token 有效期（小时），默认 168（7 天）
@@ -699,9 +713,132 @@ export ADMIN_PASSWORD=               # 留空则首次启动随机生成并打�
 ```
 
 说明：
-- `MAIL_ENABLED=false` 时不发送邮件，仅执行判定与入库。
-- `MAIL_ENABLED=true` 时，在 `run-survey`、`rerun-survey`、`run-by-path`、`run-by-archive` 成功后异步发送提醒邮件；`manual-review` 入库成功后会把备注内容作为邮件正文发送（失败不影响主流程）。
-- `MAIL_TO` 当前先固定 `zhurui8901@novogene.com`，后续可改为动态收件策略。
+- 提醒已迁移：survey 判定完成后的**第一次提醒改为飞书提醒，不再发送邮件**（见「飞书提醒设计」章）；`MAIL_ENABLED` 现在只影响第二次（人工复核）审核邮件。
+- `MAIL_ENABLED=false` 时不发送审核邮件，仅执行判定与入库。
+- `MAIL_ENABLED=true` 时，`manual-review` 入库成功后会把备注内容作为邮件正文发送（失败不影响主流程）。
+- `MAIL_TO` 当前先固定收件人，后续可改为动态收件策略。
+- `FEISHU_ENABLED=false` 时不发送飞书提醒；`true` 时在 `run-survey`、`rerun-survey`、`run-by-path`、`run-by-archive` 成功后异步触发飞书工作流（失败不影响主流程）。
+- `FEISHU_USER_LIST` 当前先固定 `zhurui8901@novogene.com`，后续可改为动态收件策略。
+
+## 飞书提醒设计
+
+### 发送策略
+样本提醒一共发送两次：
+- **第一次（survey 判定完成）**：发送**飞书提醒**，不再发送邮件。由 `run-survey`、`rerun-survey`、`run-by-path`、`run-by-archive` 成功后触发。
+- **第二次（人工复核提交）**：发送**邮件**（正文为审核备注 `note`），行为不变。
+
+飞书提醒由 `FEISHU_ENABLED` 控制开关，默认 false；发送在后台任务中执行，失败只记日志，不影响主流程。
+
+### 工作流触发接口
+后端不直接调用飞书开放平台消息接口，而是 POST 触发飞书工作流，由工作流完成消息发送：
+- 地址：`FEISHU_TRIGGER_URL`
+- 请求头：`Authorization: Bearer <FEISHU_TOKEN>`（注意 Bearer 与 token 之间有一个空格）
+- 请求体（JSON），工作流共两个参数：
+  - `user_list`：提醒人（当前取 `FEISHU_USER_LIST`，先写死）
+  - `email_content`：动态正文，由 `feishu_notifier.build_survey_reminder_content()` 生成
+- 响应：**业务异常时也返回 HTTP 200**，需检查响应体 `data.code`：
+  - 成功：`{"data": {"code": "0", "message": "success", "data": <记录ID>}, "status_code": "0"}`
+  - 失败示例：`{"data": {"code": "k_csTri_ec_...", "message": "当前记录未找到"}, "status_code": "0"}`（通常是工作流/触发器未启用）
+- 独立测试脚本：`docs/feishu_notify_webhook_test.py`
+
+### email_content 设计
+飞书工作流的发送消息节点把 email_content **原样透传**给开放平台作为消息 content；`msg_type=post` 时 content 要求是 **post 结构的 JSON 字符串**，传裸文本会报 `content is not a string in json format`。
+
+因此 email_content = 后端对**整条消息的 post 富文本结构**做 `json.dumps(..., ensure_ascii=False)` 后的完整 JSON 字符串：
+- 结果恒为合法 JSON，且作为不透明字符串透传，无换行/引号转义问题；
+- 富文本用 text/a/hr 原生标签（已验证渲染效果），标题可带动态 case_id；
+- 字段为空时兜底「未提供」；查看链接取 `MAIL_CASE_LIST_URL`。
+
+email_content 生成的 post 结构（提醒版）：
+```json
+{
+  "zh_cn": {
+    "title": "【Survey提醒】case_id=123 判定完成，请及时复核",
+    "content": [
+      [{"tag": "text", "text": "Survey 判定已完成，请及时查看结果并完成人工复核。"}],
+      [{"tag": "hr"}],
+      [
+        {"tag": "text", "text": "样本编号：", "style": ["bold"]},
+        {"tag": "text", "text": "TS_20260812_001"}
+      ],
+      [
+        {"tag": "text", "text": "目标物种：", "style": ["bold"]},
+        {"tag": "text", "text": "水稻"}
+      ],
+      [
+        {"tag": "text", "text": "case_id：", "style": ["bold"]},
+        {"tag": "text", "text": "123"}
+      ],
+      [
+        {"tag": "text", "text": "流转建议：", "style": ["bold"]},
+        {"tag": "text", "text": "建议流转", "style": ["bold"]}
+      ],
+      [
+        {"tag": "text", "text": "判定摘要：", "style": ["bold"]},
+        {"tag": "text", "text": "采用kmer 21进行Survey分析，预估得到: 矫正后基因组大小为380.5Mbp，杂合率为1.20%，重复序列比例为15.30%。"}
+      ],
+      [{"tag": "hr"}],
+      [
+        {"tag": "a", "text": "👉 点击查看判定详情", "href": "http://10.11.0.6:5173/cases", "style": ["bold"]}
+      ]
+    ]
+  }
+}
+```
+
+工作流侧配置：发送消息节点的 content 字段直接取 `{{开始节点.email_content}}` 即可，无需再套模板。
+
+### 正文版模板（预留，暂未启用）
+正文版用于第二次提醒（人工复核完成、含复核结论的最终报告），后期可能接入飞书，模板先存档。字段来源：`manual_reviews`（复核人/最终决定/备注）+ 判定结果（样本编号/目标物种/case_id/AI流转建议/判定摘要）。
+
+```json
+{
+  "zh_cn": {
+    "title": "【Survey报告】case_id=123 人工复核完成",
+    "content": [
+      [{"tag": "text", "text": "人工复核已完成，最终结论如下："}],
+      [{"tag": "hr"}],
+      [
+        {"tag": "text", "text": "复核人：", "style": ["bold"]},
+        {"tag": "text", "text": "张三"}
+      ],
+      [
+        {"tag": "text", "text": "最终决定：", "style": ["bold"]},
+        {"tag": "text", "text": "建议流转", "style": ["bold"]}
+      ],
+      [
+        {"tag": "text", "text": "复核备注：", "style": ["bold"]},
+        {"tag": "text", "text": "kmer/nt/gc 均正常，同意流转。"}
+      ],
+      [{"tag": "hr"}],
+      [
+        {"tag": "text", "text": "样本编号：", "style": ["bold"]},
+        {"tag": "text", "text": "TS_20260812_001"}
+      ],
+      [
+        {"tag": "text", "text": "目标物种：", "style": ["bold"]},
+        {"tag": "text", "text": "水稻"}
+      ],
+      [
+        {"tag": "text", "text": "case_id：", "style": ["bold"]},
+        {"tag": "text", "text": "123"}
+      ],
+      [
+        {"tag": "text", "text": "AI流转建议：", "style": ["bold"]},
+        {"tag": "text", "text": "建议流转"}
+      ],
+      [
+        {"tag": "text", "text": "判定摘要：", "style": ["bold"]},
+        {"tag": "text", "text": "采用kmer 21进行Survey分析，预估得到: 矫正后基因组大小为380.5Mbp，杂合率为1.20%，重复序列比例为15.30%。"}
+      ],
+      [{"tag": "hr"}],
+      [
+        {"tag": "a", "text": "👉 点击查看判定详情", "href": "http://10.11.0.6:5173/cases", "style": ["bold"]}
+      ]
+    ]
+  }
+}
+```
 
 ## 用户管理（scripts/manage_users.py）
 

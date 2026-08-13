@@ -18,6 +18,7 @@ from ..deps import get_current_user
 from ..json_utils import from_json_text
 from ..services.gc_plot import GC_PLOT_ROOT, cleanup_gc_outputs, collect_gc_cleanup_paths
 from ..services.kmer_plot import KMER_PLOT_ROOT, cleanup_kmer_plots, generate_kmer_plots
+from ..services.feishu_notifier import build_survey_reminder_content, send_feishu_reminder
 from ..services.mailer import send_survey_done_email
 from ..services.survey_runner import (
     check_required_files,
@@ -313,7 +314,29 @@ def _enqueue_survey_done_email(
     background_tasks.add_task(_send)
 
 
-def _parse_contact_list_json(field_value: str, field_name: str) -> list[schemas.ContactInfo]:
+def _enqueue_survey_done_feishu(
+    background_tasks: BackgroundTasks,
+    *,
+    case_detail: schemas.CaseDetailOut,
+    judge_report: schemas.JudgeReportOut | None,
+) -> None:
+    """Survey 判定完成后的第一次提醒：只发飞书提醒，不再发送邮件。"""
+    logger.info("已加入飞书提醒后台任务: case_id=%s", case_detail.id)
+
+    def _send() -> None:
+        try:
+            email_content = build_survey_reminder_content(
+                case_id=case_detail.id,
+                sample_code=case_detail.sample_code,
+                target_species=case_detail.target_species,
+                transfer_suggestion=judge_report.transfer_suggestion if judge_report else None,
+                summary_text=judge_report.summary_text if judge_report else None,
+            )
+            send_feishu_reminder(email_content=email_content)
+        except Exception as exc:
+            logger.exception("飞书提醒发送失败: case_id=%s, error=%s", case_detail.id, exc)
+
+    background_tasks.add_task(_send)
     try:
         raw = json.loads(field_value)
         if not isinstance(raw, list):
@@ -640,10 +663,9 @@ def run_by_path(
 
     detail = crud.to_case_detail_out(detail_obj)
     report = _build_judge_report_payload(detail)
-    _enqueue_survey_done_email(
+    _enqueue_survey_done_feishu(
         background_tasks,
         case_detail=detail,
-        sample_dir=normalized_dir,
         judge_report=report,
     )
 
@@ -744,10 +766,9 @@ async def run_by_archive(
 
     detail = crud.to_case_detail_out(detail_obj)
     report = _build_judge_report_payload(detail)
-    _enqueue_survey_done_email(
+    _enqueue_survey_done_feishu(
         background_tasks,
         case_detail=detail,
-        sample_dir=normalized_dir,
         judge_report=report,
     )
 
@@ -918,10 +939,9 @@ def run_survey(
     if detail_obj is None:
         raise HTTPException(status_code=500, detail="执行后读取样本失败")
     detail = crud.to_case_detail_out(detail_obj)
-    _enqueue_survey_done_email(
+    _enqueue_survey_done_feishu(
         background_tasks,
         case_detail=detail,
-        sample_dir=normalized_dir,
         judge_report=_build_judge_report_payload(detail),
     )
     return schemas.RunStepByPathOut(
@@ -991,10 +1011,9 @@ def rerun_survey(
     if detail_obj is None:
         raise HTTPException(status_code=500, detail="重跑后读取样本失败")
     detail = crud.to_case_detail_out(detail_obj)
-    _enqueue_survey_done_email(
+    _enqueue_survey_done_feishu(
         background_tasks,
         case_detail=detail,
-        sample_dir=normalized_dir,
         judge_report=_build_judge_report_payload(detail),
     )
     return schemas.RunStepByPathOut(
