@@ -14,7 +14,7 @@ WEBHOOK_URL = (
 )
 BEARER_TOKEN = "0.nlyb8zaaqwb"
 
-USER_LIST = "zhurui8901@novogene.com"
+USER_LIST = "jiangyafei@novogene.com"
 # 与后端 build_survey_reminder_content() 生成格式一致：
 # 完整的 post 富文本 JSON 字符串（发送节点要求 content 为 JSON 格式字符串，
 # 工作流对 email_content 原样透传，故由发送方构造完整结构）

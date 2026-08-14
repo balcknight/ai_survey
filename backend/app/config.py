@@ -95,7 +95,7 @@ def get_feishu_settings() -> FeishuSettings:
             "spring_3bd562b8e3__c/trigger/g34g1xsq",
         ).strip(),
         token=os.getenv("FEISHU_TOKEN", "0.nlyb8zaaqwb").strip(),
-        # 提醒人先写死，后续可改为动态收件策略。
+        # 飞书提醒兜底收件人（样本无对应动态邮箱时使用），后续可改为其他策略。
         user_list=os.getenv("FEISHU_USER_LIST", "zhurui8901@novogene.com").strip(),
     )
 

@@ -79,7 +79,7 @@
 - `nt_review`（`correct|incorrect|uncertain`）
 - `gc_review`（`correct|incorrect|uncertain`）
 - `final_decision`（存储归一化后的 `transfer|no_transfer`）
-- `note`（审核备注；作为审核邮件正文发送）
+- `note`（审核备注；作为审核邮件正文与飞书正文版提醒正文发送）
 - `kmer_incorrect_reason`（Kmer 判定不正确原因，可空）
   - 仅当 `kmer_review=incorrect` 时记录人工填写的原因，用于后续校对/改进算法。
   - **不作为邮件正文发送**（区别于 `note`）；`kmer_review` 非 `incorrect` 时落库为 NULL。
@@ -232,7 +232,7 @@ curl -X GET "http://10.11.0.6:8001/api/cases/12/judge-report"
 - `nt_review`：`correct|incorrect|uncertain`
 - `gc_review`：`correct|incorrect|uncertain`
 - `final_decision`：`transfer|no_transfer|confirm|rerun|manual_transfer`
-- `note`：审核备注（作为邮件正文发送；即使 AI 判定有误，人工也会把备注改成正确结论，不影响收件人体验）
+- `note`：审核备注（作为邮件正文与飞书正文版提醒正文发送；即使 AI 判定有误，人工也会把备注改成正确结论，不影响收件人体验）
 - `kmer_incorrect_reason`：Kmer 判定不正确原因（仅当 `kmer_review=incorrect` 时必填；仅记录用于算法校对，不发送邮件）
 
 #### 校验规则
@@ -246,7 +246,7 @@ curl -X GET "http://10.11.0.6:8001/api/cases/12/judge-report"
 
 #### 说明
 - 需登录（🔒）。审核人由登录态自动确定并写入 `reviewer_id`/`reviewer_name`，**不接受审核人入参**。
-- 入库成功后仍会按 `MAIL_ENABLED` 触发审核备注邮件（邮件正文取 `note`，行为不变，不含原因）。
+- 入库成功后按 `MAIL_ENABLED` 触发审核备注邮件（邮件正文取 `note`，不含原因），收件人取 `operation_emails` 第一个运营邮箱（为空回退 `MAIL_TO`），抄送 `group_emails` 第一个群组邮箱；同时按 `FEISHU_ENABLED` 并行触发飞书正文版提醒（正文版同样取 `note`，不含原因），收件人取 `operation_emails` 第一个运营邮箱（为空回退 `FEISHU_USER_LIST`）。
 
 ### 10) 检查文件但不执行（POST /api/cases/check-by-path）
 #### 请求参数
@@ -716,16 +716,16 @@ export ADMIN_PASSWORD=               # 留空则首次启动随机生成并打�
 - 提醒已迁移：survey 判定完成后的**第一次提醒改为飞书提醒，不再发送邮件**（见「飞书提醒设计」章）；`MAIL_ENABLED` 现在只影响第二次（人工复核）审核邮件。
 - `MAIL_ENABLED=false` 时不发送审核邮件，仅执行判定与入库。
 - `MAIL_ENABLED=true` 时，`manual-review` 入库成功后会把备注内容作为邮件正文发送（失败不影响主流程）。
-- `MAIL_TO` 当前先固定收件人，后续可改为动态收件策略。
-- `FEISHU_ENABLED=false` 时不发送飞书提醒；`true` 时在 `run-survey`、`rerun-survey`、`run-by-path`、`run-by-archive` 成功后异步触发飞书工作流（失败不影响主流程）。
-- `FEISHU_USER_LIST` 当前先固定 `zhurui8901@novogene.com`，后续可改为动态收件策略。
+- 审核邮件收件人取样本 `operation_emails` 第一个运营邮箱，为空时回退 `MAIL_TO`；抄送 `group_emails` 第一个群组邮箱（网关抄送字段 `CC_USER`；`MAIL_TO` 现仅作兜底收件人）。
+- `FEISHU_ENABLED=false` 时不发送飞书提醒；`true` 时在 `run-survey`、`rerun-survey`、`run-by-path`、`run-by-archive` 成功后异步触发提醒版，在 `manual-review` 入库成功后异步触发正文版（与审核邮件并行；失败不影响主流程）。
+- `FEISHU_USER_LIST` 为飞书提醒**兜底收件人**（样本无对应动态邮箱时使用），当前先固定 `zhurui8901@novogene.com`。
 
 ## 飞书提醒设计
 
 ### 发送策略
 样本提醒一共发送两次：
-- **第一次（survey 判定完成）**：发送**飞书提醒**，不再发送邮件。由 `run-survey`、`rerun-survey`、`run-by-path`、`run-by-archive` 成功后触发。
-- **第二次（人工复核提交）**：发送**邮件**（正文为审核备注 `note`），行为不变。
+- **第一次（survey 判定完成）**：发送**飞书提醒（提醒版）**，不再发送邮件。由 `run-survey`、`rerun-survey`、`run-by-path`、`run-by-archive` 成功后触发。收件人取该样本 `bioinfo_emails` 中**第一个有效邮箱**（第一个生信工程师），为空时回退 `FEISHU_USER_LIST`。
+- **第二次（人工复核提交）**：**邮件与飞书提醒（正文版）并行发送**。收件人取该样本 `operation_emails` 中**第一个有效邮箱**（第一个运营）：为空时邮件回退 `MAIL_TO`、飞书回退 `FEISHU_USER_LIST`。邮件另**抄送** `group_emails` 中第一个群组邮箱（网关抄送字段为 `CC_USER`）。邮件正文为审核备注 `note`；飞书正文版含复核结论与样本信息。
 
 飞书提醒由 `FEISHU_ENABLED` 控制开关，默认 false；发送在后台任务中执行，失败只记日志，不影响主流程。
 
@@ -734,8 +734,8 @@ export ADMIN_PASSWORD=               # 留空则首次启动随机生成并打�
 - 地址：`FEISHU_TRIGGER_URL`
 - 请求头：`Authorization: Bearer <FEISHU_TOKEN>`（注意 Bearer 与 token 之间有一个空格）
 - 请求体（JSON），工作流共两个参数：
-  - `user_list`：提醒人（当前取 `FEISHU_USER_LIST`，先写死）
-  - `email_content`：动态正文，由 `feishu_notifier.build_survey_reminder_content()` 生成
+  - `user_list`：提醒人邮箱（工作流按邮箱解析出 open_id 后发送；第一次取 `bioinfo_emails` 第一个邮箱，第二次取 `operation_emails` 第一个邮箱，为空回退 `FEISHU_USER_LIST`）
+  - `email_content`：动态正文（完整 post JSON 字符串），提醒版由 `build_survey_reminder_content()` 生成，正文版由 `build_survey_report_content()` 生成
 - 响应：**业务异常时也返回 HTTP 200**，需检查响应体 `data.code`：
   - 成功：`{"data": {"code": "0", "message": "success", "data": <记录ID>}, "status_code": "0"}`
   - 失败示例：`{"data": {"code": "k_csTri_ec_...", "message": "当前记录未找到"}, "status_code": "0"}`（通常是工作流/触发器未启用）
@@ -788,8 +788,8 @@ email_content 生成的 post 结构（提醒版）：
 
 工作流侧配置：发送消息节点的 content 字段直接取 `{{开始节点.email_content}}` 即可，无需再套模板。
 
-### 正文版模板（预留，暂未启用）
-正文版用于第二次提醒（人工复核完成、含复核结论的最终报告），后期可能接入飞书，模板先存档。字段来源：`manual_reviews`（复核人/最终决定/备注）+ 判定结果（样本编号/目标物种/case_id/AI流转建议/判定摘要）。
+### 正式提醒内容（正文版）
+正文版用于第二次提醒（人工复核完成、含复核结论的最终报告），与审核邮件并行发送，收件人当前写死 `FEISHU_USER_LIST`。字段来源：`manual_reviews`（复核人/最终决定/备注）+ 判定结果（样本编号/目标物种/case_id/AI流转建议/判定摘要）。`final_decision` 归一化值展示映射：`transfer→流转`、`no_transfer→不流转`。
 
 ```json
 {
@@ -800,11 +800,11 @@ email_content 生成的 post 结构（提醒版）：
       [{"tag": "hr"}],
       [
         {"tag": "text", "text": "复核人：", "style": ["bold"]},
-        {"tag": "text", "text": "张三"}
+        {"tag": "text", "text": "朱锐"}
       ],
       [
         {"tag": "text", "text": "最终决定：", "style": ["bold"]},
-        {"tag": "text", "text": "建议流转", "style": ["bold"]}
+        {"tag": "text", "text": "流转", "style": ["bold"]}
       ],
       [
         {"tag": "text", "text": "复核备注：", "style": ["bold"]},

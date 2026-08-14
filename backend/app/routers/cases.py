@@ -18,7 +18,11 @@ from ..deps import get_current_user
 from ..json_utils import from_json_text
 from ..services.gc_plot import GC_PLOT_ROOT, cleanup_gc_outputs, collect_gc_cleanup_paths
 from ..services.kmer_plot import KMER_PLOT_ROOT, cleanup_kmer_plots, generate_kmer_plots
-from ..services.feishu_notifier import build_survey_reminder_content, send_feishu_reminder
+from ..services.feishu_notifier import (
+    build_survey_reminder_content,
+    build_survey_report_content,
+    send_feishu_reminder,
+)
 from ..services.mailer import send_survey_done_email
 from ..services.survey_runner import (
     check_required_files,
@@ -288,6 +292,19 @@ def _ensure_gc_plot_artifacts(merged: dict, file_check: schemas.FileCheckOut, sa
     return updated
 
 
+def _first_contact_email(contacts: list[schemas.ContactInfo] | None) -> str | None:
+    """取联系人列表中第一个有效邮箱。"""
+    return next(
+        (item.email.strip() for item in (contacts or []) if (item.email or "").strip()),
+        None,
+    )
+
+
+def _first_valid_str(items: list[str] | None) -> str | None:
+    """取字符串列表中第一个非空项。"""
+    return next((item.strip() for item in (items or []) if (item or "").strip()), None)
+
+
 def _enqueue_survey_done_email(
     background_tasks: BackgroundTasks,
     *,
@@ -296,7 +313,20 @@ def _enqueue_survey_done_email(
     judge_report: schemas.JudgeReportOut | None,
     body_text: str | None = None,
 ) -> None:
-    logger.info("已加入邮件提醒后台任务: case_id=%s, sample_dir=%s", case_detail.id, sample_dir)
+    """人工复核提交后的审核邮件（第二次提醒）。
+
+    收件人取该样本 operation_emails 中第一个有效邮箱（第一个运营），
+    为空时回退 MAIL_TO；抄送取 group_emails 中第一个群组邮箱。
+    """
+    to_addrs = _first_contact_email(case_detail.operation_emails)
+    cc_addrs = _first_valid_str(case_detail.group_emails)
+    logger.info(
+        "已加入邮件提醒后台任务: case_id=%s, sample_dir=%s, to=%s, cc=%s",
+        case_detail.id,
+        sample_dir,
+        to_addrs or "(空，回退 MAIL_TO)",
+        cc_addrs or "(无)",
+    )
 
     def _send() -> None:
         try:
@@ -307,6 +337,8 @@ def _enqueue_survey_done_email(
                 transfer_suggestion=judge_report.transfer_suggestion if judge_report else None,
                 summary_text=judge_report.summary_text if judge_report else None,
                 body_text=body_text,
+                to_addrs=[to_addrs] if to_addrs else None,
+                cc_addrs=[cc_addrs] if cc_addrs else None,
             )
         except Exception as exc:
             logger.exception("邮件提醒发送失败: case_id=%s, error=%s", case_detail.id, exc)
@@ -320,8 +352,17 @@ def _enqueue_survey_done_feishu(
     case_detail: schemas.CaseDetailOut,
     judge_report: schemas.JudgeReportOut | None,
 ) -> None:
-    """Survey 判定完成后的第一次提醒：只发飞书提醒，不再发送邮件。"""
-    logger.info("已加入飞书提醒后台任务: case_id=%s", case_detail.id)
+    """Survey 判定完成后的第一次提醒：只发飞书提醒，不再发送邮件。
+
+    收件人取样本 bioinfo_emails 中第一个有效邮箱（第一个生信工程师）；
+    为空时回退 FEISHU_USER_LIST（当前写死）。
+    """
+    user_list = _first_contact_email(case_detail.bioinfo_emails)
+    logger.info(
+        "已加入飞书提醒后台任务: case_id=%s, user_list=%s",
+        case_detail.id,
+        user_list or "(空，回退默认收件人)",
+    )
 
     def _send() -> None:
         try:
@@ -332,9 +373,49 @@ def _enqueue_survey_done_feishu(
                 transfer_suggestion=judge_report.transfer_suggestion if judge_report else None,
                 summary_text=judge_report.summary_text if judge_report else None,
             )
-            send_feishu_reminder(email_content=email_content)
+            send_feishu_reminder(email_content=email_content, user_list=user_list)
         except Exception as exc:
             logger.exception("飞书提醒发送失败: case_id=%s, error=%s", case_detail.id, exc)
+
+    background_tasks.add_task(_send)
+
+
+def _enqueue_review_done_feishu(
+    background_tasks: BackgroundTasks,
+    *,
+    case_detail: schemas.CaseDetailOut,
+    judge_report: schemas.JudgeReportOut | None,
+    reviewer_name: str | None,
+    final_decision: str | None,
+    note: str | None,
+) -> None:
+    """人工复核提交后的第二次提醒：飞书正文版提醒，与审核邮件并行发送。
+
+    收件人取该样本 operation_emails 中第一个有效邮箱（第一个运营）；
+    为空时回退 FEISHU_USER_LIST（当前写死）。
+    """
+    user_list = _first_contact_email(case_detail.operation_emails)
+    logger.info(
+        "已加入飞书正文版提醒后台任务: case_id=%s, user_list=%s",
+        case_detail.id,
+        user_list or "(空，回退默认收件人)",
+    )
+
+    def _send() -> None:
+        try:
+            email_content = build_survey_report_content(
+                case_id=case_detail.id,
+                sample_code=case_detail.sample_code,
+                target_species=case_detail.target_species,
+                transfer_suggestion=judge_report.transfer_suggestion if judge_report else None,
+                summary_text=judge_report.summary_text if judge_report else None,
+                reviewer_name=reviewer_name,
+                final_decision=final_decision,
+                note=note,
+            )
+            send_feishu_reminder(email_content=email_content, user_list=user_list)
+        except Exception as exc:
+            logger.exception("飞书正文版提醒发送失败: case_id=%s, error=%s", case_detail.id, exc)
 
     background_tasks.add_task(_send)
     try:
@@ -603,12 +684,21 @@ def create_manual_review(
         )
     row = crud.create_manual_review(db, case_id, payload, reviewer=current_user)
     detail = crud.to_case_detail_out(obj)
+    report = _build_judge_report_payload(detail)
     _enqueue_survey_done_email(
         background_tasks,
         case_detail=detail,
         sample_dir=detail.source_path or "未提供",
-        judge_report=_build_judge_report_payload(detail),
+        judge_report=report,
         body_text=payload.note,
+    )
+    _enqueue_review_done_feishu(
+        background_tasks,
+        case_detail=detail,
+        judge_report=report,
+        reviewer_name=row.reviewer_name,
+        final_decision=row.final_decision,
+        note=row.note,
     )
     return schemas.ManualReviewOut(
         id=row.id,

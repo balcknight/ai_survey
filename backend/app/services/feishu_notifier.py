@@ -9,6 +9,48 @@ from ..config import get_feishu_settings, get_mail_settings
 
 logger = logging.getLogger("uvicorn.error")
 
+# 归一化后的 final_decision 展示文案。
+_FINAL_DECISION_DISPLAY = {
+    "transfer": "流转",
+    "no_transfer": "不流转",
+}
+
+
+def _kv_row(label: str, value: str, *, bold_value: bool = False) -> list[dict]:
+    """字段一行：label 加粗，value 可选加粗。"""
+    value_tag: dict = {"tag": "text", "text": value}
+    if bold_value:
+        value_tag["style"] = ["bold"]
+    return [
+        {"tag": "text", "text": label, "style": ["bold"]},
+        value_tag,
+    ]
+
+
+def _case_info_rows(
+    *,
+    case_id: int,
+    sample_code: str | None,
+    target_species: str | None,
+    transfer_label: str,
+    transfer_suggestion: str | None,
+    summary_text: str | None,
+    bold_transfer: bool,
+) -> list[list[dict]]:
+    """两个版本共用的样本基础信息行。"""
+    return [
+        _kv_row("样本编号：", sample_code or "未提供"),
+        _kv_row("目标物种：", target_species or "未提供"),
+        _kv_row("case_id：", str(case_id)),
+        _kv_row(transfer_label, transfer_suggestion or "未提供", bold_value=bold_transfer),
+        _kv_row("判定摘要：", summary_text or "未提供"),
+    ]
+
+
+def _link_row() -> list[dict]:
+    case_list_url = get_mail_settings().case_list_url
+    return [{"tag": "a", "text": "👉 点击查看判定详情", "href": case_list_url, "style": ["bold"]}]
+
 
 def build_survey_reminder_content(
     *,
@@ -18,7 +60,7 @@ def build_survey_reminder_content(
     transfer_suggestion: str | None,
     summary_text: str | None,
 ) -> str:
-    """构造飞书提醒的 email_content：完整的 post 富文本 JSON 字符串。
+    """构造第一次提醒（survey判定完成）的 email_content：完整 post 富文本 JSON 字符串。
 
     飞书工作流的发送消息节点把 email_content 原样透传给开放平台作为
     消息 content；``msg_type=post`` 时 content 必须是 post 结构的 JSON
@@ -29,37 +71,67 @@ def build_survey_reminder_content(
     且作为不透明字符串透传，无换行/引号转义问题。富文本结构使用 text/a/hr
     原生标签（与已验证渲染效果一致的排版）。
     """
-    case_list_url = get_mail_settings().case_list_url
     post = {
         "zh_cn": {
             "title": f"【Survey提醒】case_id={case_id} 判定完成，请及时复核",
             "content": [
                 [{"tag": "text", "text": "Survey 判定已完成，请及时查看结果并完成人工复核。"}],
                 [{"tag": "hr"}],
-                [
-                    {"tag": "text", "text": "样本编号：", "style": ["bold"]},
-                    {"tag": "text", "text": sample_code or "未提供"},
-                ],
-                [
-                    {"tag": "text", "text": "目标物种：", "style": ["bold"]},
-                    {"tag": "text", "text": target_species or "未提供"},
-                ],
-                [
-                    {"tag": "text", "text": "case_id：", "style": ["bold"]},
-                    {"tag": "text", "text": str(case_id)},
-                ],
-                [
-                    {"tag": "text", "text": "流转建议：", "style": ["bold"]},
-                    {"tag": "text", "text": transfer_suggestion or "未提供", "style": ["bold"]},
-                ],
-                [
-                    {"tag": "text", "text": "判定摘要：", "style": ["bold"]},
-                    {"tag": "text", "text": summary_text or "未提供"},
-                ],
+                *_case_info_rows(
+                    case_id=case_id,
+                    sample_code=sample_code,
+                    target_species=target_species,
+                    transfer_label="流转建议：",
+                    transfer_suggestion=transfer_suggestion,
+                    summary_text=summary_text,
+                    bold_transfer=True,
+                ),
                 [{"tag": "hr"}],
-                [
-                    {"tag": "a", "text": "👉 点击查看判定详情", "href": case_list_url, "style": ["bold"]},
-                ],
+                _link_row(),
+            ],
+        }
+    }
+    return json.dumps(post, ensure_ascii=False)
+
+
+def build_survey_report_content(
+    *,
+    case_id: int,
+    sample_code: str | None,
+    target_species: str | None,
+    transfer_suggestion: str | None,
+    summary_text: str | None,
+    reviewer_name: str | None,
+    final_decision: str | None,
+    note: str | None,
+) -> str:
+    """构造第二次提醒（人工复核完成）的 email_content：正文版 post 富文本 JSON 字符串。
+
+    与审核邮件并行发送；收件人当前写死（``FEISHU_USER_LIST``），
+    调用方不传 user_list 即用默认值。
+    """
+    decision_display = _FINAL_DECISION_DISPLAY.get(final_decision or "", final_decision or "未提供")
+    post = {
+        "zh_cn": {
+            "title": f"【Survey报告】case_id={case_id} 人工复核完成",
+            "content": [
+                [{"tag": "text", "text": "人工复核已完成，最终结论如下："}],
+                [{"tag": "hr"}],
+                _kv_row("复核人：", reviewer_name or "未提供"),
+                _kv_row("最终决定：", decision_display, bold_value=True),
+                _kv_row("复核备注：", note or "未提供"),
+                [{"tag": "hr"}],
+                *_case_info_rows(
+                    case_id=case_id,
+                    sample_code=sample_code,
+                    target_species=target_species,
+                    transfer_label="AI流转建议：",
+                    transfer_suggestion=transfer_suggestion,
+                    summary_text=summary_text,
+                    bold_transfer=False,
+                ),
+                [{"tag": "hr"}],
+                _link_row(),
             ],
         }
     }
